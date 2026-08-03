@@ -373,6 +373,37 @@ export function drawSwellRadar(
         ly += 10;
     }
 
+    // Sync angle. Staying with a swell needs V*cos(theta) = c, so when the
+    // crests are slower than you the only way to keep the same bump under your
+    // feet is to angle off by acos(c/V). Riding straight then means climbing
+    // the back of every wave. When the crests are faster than you no angle
+    // syncs, and the swell simply passes underneath.
+    if (active.length > 0 && rider.speed > 2) {
+        const cSwell = field.derived[active[0].i].phaseSpeed;
+        const ratio = cSwell / rider.speed;
+        if (ratio < 0.995) {
+            const theta = Math.acos(ratio);
+            const base = Math.atan2(field.derived[active[0].i].dirX, field.derived[active[0].i].dirZ);
+            for (const sgn of [1, -1]) {
+                const b = base + sgn * theta;
+                const [tx, ty] = toScreen(b, R);
+                ctx.strokeStyle = 'rgba(74,222,128,0.55)';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([3, 3]);
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+            label(ctx, `sync ${(theta * 180 / Math.PI).toFixed(0)}\u00b0`,
+                8, h - 6 - active.length * 10, GREEN, 'left', 8);
+        } else {
+            label(ctx, 'swell outruns you', 8, h - 6 - active.length * 10,
+                'rgba(255,255,255,0.35)', 'left', 8);
+        }
+    }
+
     // Heading angle readout, relative to straight downwind
     const off = ((rider.heading * 180) / Math.PI + 540) % 360 - 180;
     label(

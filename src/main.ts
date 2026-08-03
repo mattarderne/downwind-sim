@@ -115,9 +115,9 @@ let riderMass = 85;
 // Foil mast length (m) — caps maximum ride height above the water surface
 const MAST_LENGTH = 0.8;
 // Mast frontal area for drag (m²) — higher = more speed bleed from the submerged mast
-const MAST_DRAG_AREA = 0.0007;
+const MAST_DRAG_AREA = 0.0014;
 // Velocity kick (m/s) added per pump — higher = bigger speed burst each pump
-const PUMP_IMPULSE = 2.5;
+const PUMP_IMPULSE = 2.0;
 // Energy spent per pump — higher = fewer pumps before you're drained
 const PUMP_COST = 20;
 // Minimum seconds between pumps — prevents spam-pumping for free speed
@@ -3201,8 +3201,12 @@ function updatePhysics(dt: number, time: number) {
     const inducedCD = (CL * CL) / (Math.PI * foil.aspectRatio * 0.85);
     const totalCD = foil.baseDragCoeff + inducedCD;
     let dragMag = 0.5 * RHO_WATER * speed * speed * totalCD * foil.wingArea;
-    // Mast drag
-    dragMag += 0.5 * RHO_WATER * speed * speed * 0.8 * MAST_DRAG_AREA;
+    // Mast drag, proportional to the submerged length. Previously a fixed
+    // area, which made deceleration identical whether 5 cm or 65 cm of mast
+    // was in the water — so flying high cost nothing and bought nothing.
+    // Now height is a resource: riding high is measurably faster.
+    const submergedFrac = Math.max(0, MAST_LENGTH - foilState.rideHeight) / MAST_LENGTH;
+    dragMag += 0.5 * RHO_WATER * speed * speed * 0.8 * MAST_DRAG_AREA * submergedFrac;
     // Board touching water drag penalty
     if (foilState.rideHeight < 0.1) {
         const wetFactor = 1.0 - foilState.rideHeight / 0.1;
@@ -3271,7 +3275,13 @@ function updatePhysics(dt: number, time: number) {
         // throws extra flow past the wing and tilts lift forward. That tilt is
         // w/V, so it fades as you speed up. A flat impulse let riders pump
         // their way to 38 kt, which no amount of pumping achieves in reality.
-        const pumpGain = Math.min(1, trimSpeedFor(foil, riderMass) / Math.max(speed, 0.5));
+        // Falls off with the SQUARE of the speed ratio. A linear falloff still
+        // let pumping alone hold 18.3 kt on glassy water for a full minute,
+        // which made the waves decorative — there was no reason to hunt a bump.
+        // Pumping is now a connection and recovery tool: it will get you moving
+        // and rescue a bad moment, but it cannot substitute for the swell.
+        const r = trimSpeedFor(foil, riderMass) / Math.max(speed, 0.5);
+        const pumpGain = Math.min(1, r * r);
         foilState.velocity.addScaledVector(pumpDir, PUMP_IMPULSE * pumpGain);
         foilState.energy -= PUMP_COST;
         foilState.lastPumpTime = time;

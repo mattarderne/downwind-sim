@@ -160,3 +160,90 @@ everything around it: no pitch coordination, no speed cost, no sideslip.
 3. Energy-conserving height/speed exchange — makes the battery honest
 4. Forgiving heave, expensive turning — puts difficulty in the right place
 5. Coordinated turn model with speed cost and sideslip
+
+---
+
+# Round 2 — the bump-linking mechanic
+
+## 8. Mast drag and pumping, fixed and measured
+
+Mast drag now scales with submerged length, so height is a resource:
+
+| ride height | before | after |
+|---|---|---|
+| 0.15 m | −0.887 m/s² | −1.099 m/s² |
+| 0.75 m | −0.887 m/s² | −0.592 m/s² |
+
+46% less drag flying high. Pumping now falls off with the square of the speed
+ratio: on flat water it decays 19.2 kt → 15.5 kt → touchdown at 28.5 s, where
+before it held 18.3 kt for a full minute. Waves are now the energy source.
+
+## 9. The whole game is one ratio: c / V
+
+Staying with a swell requires the component of your velocity along the swell
+direction to match its phase speed:
+
+```
+V * cos(theta) = c        =>   theta = acos(c / V)
+```
+
+Three regimes, and they are entirely determined by crest speed against rider
+speed:
+
+| c / V | what happens | play |
+|---|---|---|
+| **> 1** | no angle syncs; swell passes underneath | flat, boring, "run up the back and stop" |
+| **~ 1** | straight already syncs | forgiving, no technique needed |
+| **< 1** | must angle by acos(c/V) to hold a bump | the actual game |
+
+**The current default sits at c/V = 1.04** — crests 19.7 kt, rider 19 kt — which
+is the worst of the three. That single number is why the mechanic feels absent.
+
+Measured, holding a heading across 5 spawns, 180 s each, with the swell slowed
+to 16.7 kt crests:
+
+| heading | full runs | median downwind |
+|---|---|---|
+| 0° | 0/5 | 48 m |
+| 15° | 0/5 | 44 m |
+| 25° | 0/5 | 48 m |
+| **35°** | **3/5** | **1416 m** |
+
+A 30x difference in distance, with the optimum landing where theory says it
+should: acos(16.7/20) = 33.4°.
+
+**Correction to an earlier reading.** A single run had suggested 30° was best in
+the current sea. It did not replicate — across 5 spawns straight was better
+(4/5 full runs vs 2/5). Single runs in this sim vary enormously; nothing here
+should be trusted below about 5 spawns.
+
+## 10. Design consequences
+
+**Tune the sea by c/V, not by wave height.** Height sets how it looks and how
+steep it is; the crest-to-rider speed ratio sets whether there is a game. Period
+controls c via c = g*T/2pi, so period is the difficulty dial.
+
+**This gives progression for free.** Cruise speed V comes from foil area and
+rider weight, so:
+
+- A big beginner foil cruises ~13.5 kt. Against 16.7 kt crests, c/V > 1 — the
+  swell carries them, nothing to learn, forgiving.
+- A race foil cruises ~21 kt. Against the same swell, c/V = 0.8, and they must
+  hold ~37° to stay connected.
+
+The same water is a gentle ride on one foil and a technical one on another. That
+is a real upgrade path: a faster foil does not just raise the number, it changes
+the line you have to ride.
+
+**Suggested difficulty curve**, expressed as c/V rather than as height:
+
+| tier | c/V | sync angle | feel |
+|---|---|---|---|
+| learning | ~1.0 | 0° | straight works, stay on foil |
+| intermediate | 0.9 | 25° | angling helps noticeably |
+| advanced | 0.8 | 37° | must link bumps or stop |
+
+**Still to do:** the crest-crossing penalty is brutal (−65 N, −1.06 kt/s, ~7 kt
+lost per crest). Once angling is properly rewarded that penalty is the stick and
+the sync line is the carrot, but it likely wants softening so a mistake costs a
+bump rather than the run.
