@@ -1561,7 +1561,7 @@ function updateHUD() {
         if (isMobile) {
             hudControls.textContent = 'Tap to launch · Drag to steer & trim';
         } else {
-            hudControls.textContent = '← → Turn  ·  ↑ climb  ↓ sink  ·  SPACE Pump\n\n    Press SPACE to launch';
+            hudControls.textContent = '← → Turn  ·  ↑ nose down  ↓ nose up  ·  SPACE Pump\n\n    Press SPACE to launch';
         }
         hudLeaderboard.innerHTML = cachedTop3HTML;
         hudLeaderboard.style.display = cachedTop3HTML ? '' : 'none';
@@ -3112,21 +3112,24 @@ function updatePhysics(dt: number, time: number) {
         if (input.right) targetRoll = -MAX_ROLL;
     }
 
-    // Fore/aft weight shift. This mapping matches the ORIGINAL game exactly and
-    // must not be changed — only how it is drawn:
+    // Fore/aft weight shift. THE CONVENTION IS: UP = DOWN.
     //
-    //   up arrow   -> back foot  -> more angle of attack -> CLIMB
-    //   down arrow -> front foot -> less angle of attack -> SINK
+    //   up arrow   -> front foot -> nose down -> drive down the face, accelerate
+    //   down arrow -> back foot  -> nose up   -> climb
     //
-    // The original's own 3D board tipped its nose DOWN while climbing, which
-    // reads as an inverted control. That is a fault in the drawing, not the
-    // control, and is corrected in updateBoardVisuals rather than here.
+    // This matches what the original game visibly does, which is what players
+    // have learned. Reading the original's code alone is misleading: its up
+    // arrow does technically raise the ride-height target, but only via
+    // pitchBias = pitch * 0.3, worth 2.6 cm on an 80 cm mast — 3.3%, far below
+    // perception. What players actually see and feel is the board pitching its
+    // full 5 degrees nose-down and driving down the wave. Do not "correct" this
+    // to match the code's altitude sign; the visible behaviour is the contract.
     let targetFoot = 0;
     if (input.pitchY !== 0) {
-        targetFoot = -input.pitchY;
+        targetFoot = input.pitchY;
     } else {
-        if (input.up) targetFoot = 1;
-        if (input.down) targetFoot = -1;
+        if (input.up) targetFoot = -1;
+        if (input.down) targetFoot = 1;
     }
     foilState.footPressure +=
         (targetFoot - foilState.footPressure) * Math.min(1, FOOT_RESPONSE * dt);

@@ -422,10 +422,12 @@ export function drawTrimGauge(
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
     ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, colH, 6); ctx.fill();
 
-    // Drawn so the bar goes where the key sends it, and agrees with the height
-    // column beside it:
-    //   TOP    = up arrow   = back foot  = nose up   = CLIMB = breach risk
-    //   BOTTOM = down arrow = front foot = nose down = SINK  = touchdown risk
+    // Drawn so the bar goes where the key sends it, following the UP = DOWN
+    // convention:
+    //   TOP    = up arrow   = front foot = nose down = drive down = touchdown risk
+    //   BOTTOM = down arrow = back foot  = nose up   = climb      = breach risk
+    // This runs opposite to the height column beside it, so both are labelled
+    // with the key that drives them.
     const zone = colH * 0.2;
     ctx.fillStyle = 'rgba(239,83,80,0.2)';
     ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, zone, [6, 6, 0, 0]); ctx.fill();
@@ -439,8 +441,8 @@ export function drawTrimGauge(
     ctx.moveTo(trackX - 3, midY); ctx.lineTo(trackX + trackW + 3, midY);
     ctx.stroke();
 
-    // +1 is back foot, set by the up arrow, and sits at the TOP.
-    const toY = (p: number) => midY - Math.max(-1, Math.min(1, p)) * (colH / 2);
+    // Up arrow gives front foot (-1), which sits at the TOP.
+    const toY = (p: number) => midY + Math.max(-1, Math.min(1, p)) * (colH / 2);
 
     const ty = toY(rider.footPressureTrim);
     ctx.strokeStyle = GREEN;
@@ -455,10 +457,10 @@ export function drawTrimGauge(
     ctx.beginPath(); ctx.roundRect(trackX - 2, py - 3.5, trackW + 4, 7, 3); ctx.fill();
 
     // Label both the foot and its effect, so neither reading is ambiguous.
-    label(ctx, '\u2191 BACK', trackX + trackW / 2, trackTop - 12, DIM, 'center', 8);
-    label(ctx, 'climb', trackX + trackW / 2, trackTop - 4, FAINT, 'center', 7);
-    label(ctx, 'sink', trackX + trackW / 2, trackTop + colH + 9, FAINT, 'center', 7);
-    label(ctx, '\u2193 FRONT', trackX + trackW / 2, trackTop + colH + 17, DIM, 'center', 8);
+    label(ctx, '\u2191 NOSE DOWN', trackX + trackW / 2, trackTop - 12, DIM, 'center', 8);
+    label(ctx, 'down the face', trackX + trackW / 2, trackTop - 4, FAINT, 'center', 7);
+    label(ctx, 'climb', trackX + trackW / 2, trackTop + colH + 9, FAINT, 'center', 7);
+    label(ctx, '\u2193 NOSE UP', trackX + trackW / 2, trackTop + colH + 17, DIM, 'center', 8);
 
     // --- Right column: side elevation of the rig against the water ---------
     const dx0 = 52;
@@ -641,10 +643,10 @@ export function drawTrimGauge(
     // --- Status ------------------------------------------------------------
     let msg = 'trimmed';
     let msgColor = GREEN;
-    if (breaching) { msg = 'BREACHING — press \u2193'; msgColor = RED; }
-    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING — press \u2191'; msgColor = RED; }
-    else if (rider.footPressure - rider.footPressureTrim > 0.3) { msg = 'ease \u2193'; msgColor = AMBER; }
-    else if (rider.footPressureTrim - rider.footPressure > 0.3) { msg = 'more \u2191'; msgColor = AMBER; }
+    if (breaching) { msg = 'BREACHING — press \u2191'; msgColor = RED; }
+    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING — press \u2193'; msgColor = RED; }
+    else if (rider.footPressure - rider.footPressureTrim > 0.3) { msg = 'press \u2191'; msgColor = AMBER; }
+    else if (rider.footPressureTrim - rider.footPressure > 0.3) { msg = 'press \u2193'; msgColor = AMBER; }
     label(ctx, msg, w / 2, h - 14, msgColor, 'center', 9);
 
     label(
