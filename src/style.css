@@ -841,30 +841,39 @@ canvas {
 }
 
 /* ---------- bump readability experiments ---------- */
+/* Sits inside #instruments so it stacks under the other panels, top right. */
 #viz-wrap {
-  position: fixed;
-  left: 12px;
-  bottom: 12px;
-  z-index: 120;
+  pointer-events: auto;
   font-family: monospace;
+  background: rgba(0, 18, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 8px 10px 9px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
+  gap: 6px;
+  width: 320px;
+}
+
+#viz-title {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.35);
 }
 
 #viz-bar {
   display: flex;
   gap: 3px;
+  flex-wrap: wrap;
 }
 
 #viz-bar button {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 21px;
   font-family: monospace;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.6);
-  background: rgba(0, 18, 36, 0.72);
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 5px;
   cursor: pointer;
@@ -873,7 +882,7 @@ canvas {
 
 #viz-bar button:hover {
   color: #fff;
-  background: rgba(0, 30, 60, 0.9);
+  background: rgba(255, 255, 255, 0.16);
 }
 
 #viz-bar button.viz-btn--active {
@@ -884,15 +893,8 @@ canvas {
 }
 
 #viz-note {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.55);
-  background: rgba(0, 18, 36, 0.6);
-  padding: 3px 7px;
-  border-radius: 5px;
-  max-width: 300px;
-}
-
-@media (max-width: 768px), (pointer: coarse) {
-  #viz-wrap { left: 8px; bottom: 8px; transform: scale(0.85); transform-origin: bottom left; }
-  #viz-note { max-width: 200px; }
+  font-size: 9px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.5);
+  min-height: 26px;
 }
