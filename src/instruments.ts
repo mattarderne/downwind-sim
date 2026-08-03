@@ -26,6 +26,8 @@ export interface RiderReadout {
     footPressure: number;
     footPressureTrim: number;
     alpha: number;
+    alphaTrim: number;
+    inflowAngle: number;
     loadFactor: number;
     wingDepth: number;
     ventFactor: number;
@@ -548,8 +550,15 @@ export function drawTrimGauge(
 
     // Pitch and AoA are amplified so small trim changes stay legible here.
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-    const pitchVis = clamp(-rider.pitch * 3.2, -0.45, 0.45);
-    const aoaVis = clamp(-rider.alpha * 3.5, -0.5, 0.5);
+    // The rig is ONE rigid body — board, mast, fuselage and both wings. Drawing
+    // the wings rotating against the fuselage was physically impossible, and
+    // since alpha tracks the flow rather than the rider's input the wings
+    // appeared to swing opposite to the board. Instead: rotate the whole rig by
+    // the geometric trim the rider is holding, and draw the oncoming water as a
+    // separate arrow. The gap between chord and flow IS the angle of attack.
+    const ANG_VIS = 4.0;
+    const pitchVis = clamp(-rider.alphaTrim * ANG_VIS, -0.45, 0.45);
+    const flowVis = clamp(-rider.inflowAngle * ANG_VIS, -0.45, 0.45);
     const wingColor = Math.abs(rider.alpha) > 0.16 ? RED
         : Math.abs(rider.alpha) > 0.10 ? AMBER : rigColor;
 
@@ -585,26 +594,42 @@ export function drawTrimGauge(
 
     // Front wing — the lifting surface, and the part that has to stay buried.
     // Drawn heaviest of everything so it reads as the thing to watch.
-    ctx.save();
-    ctx.translate(FUSE_FWD, mastPx);
-    ctx.rotate(aoaVis);
     ctx.fillStyle = wingColor;
     ctx.beginPath();
-    ctx.ellipse(0, 0, dw * 0.09, 2.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(FUSE_FWD, mastPx, dw * 0.09, 2.6, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
 
     // Rear stabiliser
-    ctx.save();
-    ctx.translate(-FUSE_AFT, mastPx);
-    ctx.rotate(aoaVis);
     ctx.fillStyle = wingColor;
     ctx.beginPath();
-    ctx.ellipse(0, 0, dw * 0.05, 1.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(-FUSE_AFT, mastPx, dw * 0.05, 1.6, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
 
     ctx.restore();
+
+    // Oncoming water at the wing. Water flows past from the front, so the arrow
+    // runs nose-to-tail; its tilt against the wing chord is the angle of attack.
+    {
+        const wingScreenX = mastX + FUSE_FWD;
+        const wingScreenY = boardY + mastPx;
+        ctx.save();
+        ctx.translate(wingScreenX, wingScreenY);
+        ctx.rotate(flowVis);
+        ctx.strokeStyle = 'rgba(125,211,252,0.9)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(dw * 0.20, 0);
+        ctx.lineTo(-dw * 0.02, 0);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(125,211,252,0.9)';
+        ctx.beginPath();
+        ctx.moveTo(-dw * 0.05, 0);
+        ctx.lineTo(dw * 0.005, -2.2);
+        ctx.lineTo(dw * 0.005, 2.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+    }
 
     ctx.restore();
 

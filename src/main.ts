@@ -224,6 +224,10 @@ const foilState = {
     footPressureTrim: 0,
     /** Current angle of attack at the wing, radians. */
     alpha: 0,
+    /** Geometric trim angle the rider is holding, radians. */
+    alphaTrim: 0,
+    /** Angle of the oncoming water relative to the flight path, radians. */
+    inflowAngle: 0,
     /** Lift as a multiple of rider weight. 1.0 = holding altitude. */
     loadFactor: 1,
     /** Wing depth below the surface, m. Zero means breached. */
@@ -2846,6 +2850,7 @@ instToggleEl.addEventListener('click', () => setInstrumentsVisible(!instrumentsV
 const _riderReadout: RiderReadout = {
     x: 0, z: 0, heading: 0, track: 0, speed: 0, rideHeight: 0,
     mastLength: MAST_LENGTH, footPressure: 0, footPressureTrim: 0, alpha: 0,
+    alphaTrim: 0, inflowAngle: 0,
     loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, roll: 0, pitch: 0,
     onFoil: true, surfaceHeight: 0, ventDepth: VENT_DEPTH,
 };
@@ -2865,6 +2870,8 @@ function drawInstruments(time: number) {
     r.footPressure = foilState.footPressure;
     r.footPressureTrim = foilState.footPressureTrim;
     r.alpha = foilState.alpha;
+    r.alphaTrim = foilState.alphaTrim;
+    r.inflowAngle = foilState.inflowAngle;
     r.loadFactor = foilState.loadFactor;
     r.wingDepth = foilState.wingDepth;
     r.ventFactor = foilState.ventFactor;
@@ -3152,6 +3159,8 @@ function updatePhysics(dt: number, time: number) {
     const inflowAngle = Math.atan2(foilState.vy - orbitalW, vRef);
     const alphaTrim = ALPHA_NEUTRAL + foilState.footPressure * ALPHA_RANGE;
     let alpha = alphaTrim - inflowAngle;
+    foilState.inflowAngle = inflowAngle;
+    foilState.alphaTrim = alphaTrim;
 
     // Finite-wing lift slope (lifting-line): CL_alpha = 2*pi*AR / (AR + 2)
     const clAlpha = (2 * Math.PI * foil.aspectRatio) / (foil.aspectRatio + 2);
