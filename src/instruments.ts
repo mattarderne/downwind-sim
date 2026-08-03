@@ -422,12 +422,11 @@ export function drawTrimGauge(
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
     ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, colH, 6); ctx.fill();
 
-    // Oriented by what the control DOES, not by board geometry: up is climb.
-    // That matches the arrow keys (up = back foot = climb) and the height
-    // column beside it (breach at the top). Orienting it like a board seen
-    // from behind put those three in disagreement.
-    // Top = back foot = nose up = climb = breach risk.
-    // Bottom = front foot = nose down = sink = touchdown risk.
+    // Laid out as a stick, so the bar goes where you push it:
+    //   TOP    = up arrow   = front foot = nose down = sink = touchdown risk
+    //   BOTTOM = down arrow = back foot  = nose up   = climb = breach risk
+    // Note this deliberately runs opposite to the height column beside it —
+    // one shows stick position, the other shows altitude. Both are labelled.
     const zone = colH * 0.2;
     ctx.fillStyle = 'rgba(239,83,80,0.2)';
     ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, zone, [6, 6, 0, 0]); ctx.fill();
@@ -441,8 +440,9 @@ export function drawTrimGauge(
     ctx.moveTo(trackX - 3, midY); ctx.lineTo(trackX + trackW + 3, midY);
     ctx.stroke();
 
-    // +1 is back foot and sits at the TOP, so pressing up moves the bar up.
-    const toY = (p: number) => midY - Math.max(-1, Math.min(1, p)) * (colH / 2);
+    // +1 is back foot and sits at the BOTTOM, so pressing up (front foot,
+    // negative) moves the bar up.
+    const toY = (p: number) => midY + Math.max(-1, Math.min(1, p)) * (colH / 2);
 
     const ty = toY(rider.footPressureTrim);
     ctx.strokeStyle = GREEN;
@@ -457,10 +457,10 @@ export function drawTrimGauge(
     ctx.beginPath(); ctx.roundRect(trackX - 2, py - 3.5, trackW + 4, 7, 3); ctx.fill();
 
     // Label both the foot and its effect, so neither reading is ambiguous.
-    label(ctx, 'BACK \u2191', trackX + trackW / 2, trackTop - 12, DIM, 'center', 8);
-    label(ctx, 'climb', trackX + trackW / 2, trackTop - 4, FAINT, 'center', 7);
-    label(ctx, 'sink', trackX + trackW / 2, trackTop + colH + 9, FAINT, 'center', 7);
-    label(ctx, 'FRONT \u2193', trackX + trackW / 2, trackTop + colH + 17, DIM, 'center', 8);
+    label(ctx, '\u2191 FRONT', trackX + trackW / 2, trackTop - 12, DIM, 'center', 8);
+    label(ctx, 'nose down', trackX + trackW / 2, trackTop - 4, FAINT, 'center', 7);
+    label(ctx, 'nose up', trackX + trackW / 2, trackTop + colH + 9, FAINT, 'center', 7);
+    label(ctx, '\u2193 BACK', trackX + trackW / 2, trackTop + colH + 17, DIM, 'center', 8);
 
     // --- Right column: side elevation of the rig against the water ---------
     const dx0 = 52;
@@ -643,10 +643,10 @@ export function drawTrimGauge(
     // --- Status ------------------------------------------------------------
     let msg = 'trimmed';
     let msgColor = GREEN;
-    if (breaching) { msg = 'BREACHING — front foot'; msgColor = RED; }
-    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING — back foot'; msgColor = RED; }
-    else if (rider.footPressure - rider.footPressureTrim > 0.3) { msg = 'ease forward'; msgColor = AMBER; }
-    else if (rider.footPressureTrim - rider.footPressure > 0.3) { msg = 'more back foot'; msgColor = AMBER; }
+    if (breaching) { msg = 'BREACHING — push \u2191'; msgColor = RED; }
+    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING — pull \u2193'; msgColor = RED; }
+    else if (rider.footPressure - rider.footPressureTrim > 0.3) { msg = 'push \u2191 a little'; msgColor = AMBER; }
+    else if (rider.footPressureTrim - rider.footPressure > 0.3) { msg = 'pull \u2193 a little'; msgColor = AMBER; }
     label(ctx, msg, w / 2, h - 14, msgColor, 'center', 9);
 
     label(

@@ -1561,7 +1561,7 @@ function updateHUD() {
         if (isMobile) {
             hudControls.textContent = 'Tap to launch · Drag to steer & trim';
         } else {
-            hudControls.textContent = '← → Turn  ·  ↑ ↓ Foot pressure  ·  SPACE Pump\n\n    Press SPACE to launch';
+            hudControls.textContent = '← → Turn  ·  ↑ nose down  ↓ nose up  ·  SPACE Pump\n\n    Press SPACE to launch';
         }
         hudLeaderboard.innerHTML = cachedTop3HTML;
         hudLeaderboard.style.display = cachedTop3HTML ? '' : 'none';
@@ -3112,14 +3112,19 @@ function updatePhysics(dt: number, time: number) {
         if (input.right) targetRoll = -MAX_ROLL;
     }
 
-    // Fore/aft weight shift. Back foot (+) raises the nose and the angle of
-    // attack; front foot (-) drops it.
+    // Fore/aft weight shift, mapped like a flight stick:
+    //
+    //   up arrow / push forward  ->  FRONT foot  ->  nose down  ->  sink, accelerate
+    //   down arrow / pull back   ->  BACK  foot  ->  nose up    ->  climb
+    //
+    // footPressure keeps its physical sign throughout: +1 is back foot, which
+    // adds angle of attack, -1 is front foot, which takes it away.
     let targetFoot = 0;
     if (input.pitchY !== 0) {
-        targetFoot = -input.pitchY;
+        targetFoot = input.pitchY;
     } else {
-        if (input.up) targetFoot = 1;
-        if (input.down) targetFoot = -1;
+        if (input.up) targetFoot = -1;
+        if (input.down) targetFoot = 1;
     }
     foilState.footPressure +=
         (targetFoot - foilState.footPressure) * Math.min(1, FOOT_RESPONSE * dt);
