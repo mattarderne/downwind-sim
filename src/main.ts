@@ -5,6 +5,26 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import GUI from 'lil-gui';
+import {
+    drawWaveTrain,
+    drawSetMeter,
+    drawSwellRadar,
+    drawTrimGauge,
+    type RiderReadout,
+} from './instruments';
+import {
+    verticalOrbitalVelocity,
+    MAX_COMPONENTS,
+    buildWaveField,
+    surfaceAtWorldPos,
+    waterHeightFast,
+    analyseSwell,
+    dominantSwell,
+    periodToWavelength,
+    periodToPhaseSpeed,
+    type SwellSpec,
+    type WaveField,
+} from './waves';
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -12,7 +32,7 @@ const BASE = import.meta.env.BASE_URL;
 const SPAWN_POINT = new THREE.Vector3(0, 0, -800);
 
 const PARAMS = {
-    windSpeed: 1.18,
+
     waterColor: '#004466',
     foamColor: '#ffffff',
     sunElevation: 85,
@@ -53,7 +73,7 @@ const FOIL_PRESETS: Record<string, FoilConfig> = {
         aspectRatio: 12.5,
         stallSpeed: 7.0,
         maxLiftCoeff: 0.5,
-        baseDragCoeff: 0.01,
+        baseDragCoeff: 0.008,
         turnRateMax: 2,
     },
     'Mid Aspect Cruise': {
@@ -64,7 +84,7 @@ const FOIL_PRESETS: Record<string, FoilConfig> = {
         aspectRatio: 6.15,
         stallSpeed: 4.0,
         maxLiftCoeff: 0.5,
-        baseDragCoeff: 0.012,
+        baseDragCoeff: 0.010,
         turnRateMax: 0.6,
     },
 };
@@ -92,7 +112,7 @@ const RIDER_MASS = 80;
 // Foil mast length (m) — caps maximum ride height above the water surface
 const MAST_LENGTH = 0.8;
 // Mast frontal area for drag (m²) — higher = more speed bleed from the submerged mast
-const MAST_DRAG_AREA = 0.0015;
+const MAST_DRAG_AREA = 0.0007;
 // Velocity kick (m/s) added per pump — higher = bigger speed burst each pump
 const PUMP_IMPULSE = 2.5;
 // Energy spent per pump — higher = fewer pumps before you're drained
@@ -103,20 +123,31 @@ const PUMP_COOLDOWN = 0.35;
 const ENERGY_REGEN = 5;
 // Max bank angle (~30°) — limits how hard you can lean into turns
 const MAX_ROLL = Math.PI / 6;
-// Max pitch angle (~5°) — controls nose-up/down bias that shifts target ride height
+// Max pitch angle (~5°) — visual board attitude, driven by foot pressure
 const MAX_PITCH = Math.PI / 36;
+// --- Foil aerodynamics (hydrodynamics) ---
+// Trim angle of attack at neutral foot pressure (deg). Sets the natural
+// cruising speed: the foil flies where lift from this AoA equals rider weight.
+const ALPHA_NEUTRAL = 2.4 * Math.PI / 180;
+// AoA authority from full front-to-back foot pressure (deg either side).
+const ALPHA_RANGE = 5.0 * Math.PI / 180;
+// Stall angle — beyond this CL collapses and you fall off foil.
+const ALPHA_STALL = 12.0 * Math.PI / 180;
+// Wing depth (m) below which the foil starts ventilating and loses lift.
+// This is the breach mechanic: fly too high and the wing sucks air.
+const VENT_DEPTH = 0.30;
+// How fast foot pressure follows input (1/s) — rider weight-shift rate.
+const FOOT_RESPONSE = 4.5;
+// Extra vertical damping beyond the natural AoA feedback.
+const HEAVE_DAMPING = 0.6;
 // Roll spring stiffness — higher = snappier response to turn input
 const ROLL_SPRING = 6.0;
 // Roll damping — higher = less oscillation, smoother settling into turns
 const ROLL_DAMPING = 3.0;
 // Wave-induced roll strength — higher = more wobble from uneven wave surface across the wing
 const WAVE_TORQUE_GAIN = 2.0;
-// Ride height spring stiffness — higher = faster height correction toward lift-based target
-const HEIGHT_SPRING = 8.0;
-// Ride height damping — higher = less vertical bounce, more stable foiling altitude
-const HEIGHT_DAMPING = 8.0;
 // Wave slope energy multiplier — higher = more speed gained from riding down wave faces
-const WAVE_ENERGY_MULT = 2.5;
+const WAVE_ENERGY_MULT = 1.8;
 // Sideways slip decay rate — higher = tighter tracking along heading, less drift in turns
 const LATERAL_RESISTANCE = 1.0;
 
@@ -129,12 +160,34 @@ const foilState = {
     roll: 0,
     rollRate: 0,
     rideHeight: 0.35,
-    rideHeightVel: 0,
+    /** World-frame vertical velocity of the board, m/s. */
+    vy: 0,
+    /** World-frame altitude of the board, m. rideHeight = worldY - surfaceY. */
+    worldY: 0.35,
+    /** Water surface height under the board this frame, m. */
+    surfaceY: 0,
     onFoil: true,
     energy: 100,
     speed: 0,
     lastPumpTime: -10,
     distanceTravelled: 0,
+    // --- Foil flight state (read by the instrument cluster) ---
+    /** Rider fore/aft weight shift. -1 = all front foot, +1 = all back foot. */
+    footPressure: 0,
+    /** Foot pressure that would hold altitude right now — the target to chase. */
+    footPressureTrim: 0,
+    /** Current angle of attack at the wing, radians. */
+    alpha: 0,
+    /** Lift as a multiple of rider weight. 1.0 = holding altitude. */
+    loadFactor: 1,
+    /** Wing depth below the surface, m. Zero means breached. */
+    wingDepth: MAST_LENGTH - 0.35,
+    /** 0 = fully ventilated (no lift), 1 = clean flow. */
+    ventFactor: 1,
+    /** Vertical water velocity at the wing, m/s. Positive = rising. */
+    orbitalW: 0,
+    /** Why the last crash happened, for the HUD message. */
+    crashReason: '' as '' | 'breach' | 'touchdown' | 'stall',
 };
 
 type GameState = 'starting' | 'riding' | 'crashed';
@@ -317,12 +370,22 @@ function resetFoilState() {
     foilState.roll = 0;
     foilState.rollRate = 0;
     foilState.rideHeight = 0.35;
-    foilState.rideHeightVel = 0;
+    foilState.vy = 0;
+    foilState.worldY = 0.35;
+    foilState.surfaceY = 0;
     foilState.onFoil = true;
     foilState.energy = 100;
     foilState.speed = 0;
     foilState.lastPumpTime = -10;
     foilState.distanceTravelled = 0;
+    foilState.footPressure = 0;
+    foilState.footPressureTrim = 0;
+    foilState.alpha = 0;
+    foilState.loadFactor = 1;
+    foilState.wingDepth = MAST_LENGTH - 0.35;
+    foilState.ventFactor = 1;
+    foilState.orbitalW = 0;
+    foilState.crashReason = '';
     gameState = 'starting';
     prevGameState = null;
     clearWakeTrail();
@@ -340,18 +403,57 @@ function launchFoil() {
     const dir = headingToDir(foilState.heading);
     foilState.velocity.copy(dir.multiplyScalar(initialSpeed));
     foilState.rideHeight = 0.35;
+    foilState.vy = 0;
+    foilState.surfaceY = getSurfaceInfoAtWorldPos(
+        foilState.position.x, foilState.position.z, clock.elapsedTime
+    ).position.y;
+    foilState.worldY = foilState.surfaceY + 0.35;
+    foilState.footPressure = 0;
+    foilState.crashReason = '';
     foilState.onFoil = true;
     gameState = 'riding';
 }
 
 
-// Define 4 waves to simulate downwind bumps (mostly moving +Z)
-const waveConfig = [
-    { dir: new THREE.Vector2(0.2, 0.9), steepness: 0.15, wavelength: 40.0, speed: 1.2 },
-    { dir: new THREE.Vector2(-0.1, 0.95), steepness: 0.1, wavelength: 25.0, speed: 1.1 },
-    { dir: new THREE.Vector2(0.3, 0.8), steepness: 0.08, wavelength: 15.0, speed: 1.3 },
-    { dir: new THREE.Vector2(-0.2, 0.9), steepness: 0.05, wavelength: 8.0, speed: 1.5 }
+// --- SEA STATE ---
+// Two independent swell systems plus wind chop. Each is specified the way a
+// forecast reads it — significant height, peak period, direction — and expanded
+// into a band of spectral components by buildWaveField(), so wave groups (sets)
+// emerge from the physics instead of being faked.
+const SWELLS: SwellSpec[] = [
+    {
+        name: 'Primary swell',
+        enabled: true,
+        height: 1.2,        // Hs, m
+        period: 8.0,        // Tp, s  -> 100 m wavelength, 24 kt crests
+        direction: 0,       // straight downwind (+Z)
+        spread: 12,
+        components: 12,
+        bandwidth: 0.05,
+    },
+    {
+        name: 'Secondary swell',
+        enabled: true,
+        height: 0.6,
+        period: 13.0,       // long-period groundswell, 264 m, 39 kt crests
+        direction: 28,      // crossing from the left
+        spread: 14,
+        components: 10,
+        bandwidth: 0.05,
+    },
+    {
+        name: 'Wind chop',
+        enabled: true,
+        height: 0.35,
+        period: 3.2,
+        direction: 6,
+        spread: 32,
+        components: 10,
+        bandwidth: 0.18,
+    },
 ];
+
+let waveField: WaveField = buildWaveField(SWELLS);
 
 // --- THREE.JS SETUP ---
 const canvas = document.createElement('canvas');
@@ -652,12 +754,74 @@ const waterMaterial = new THREE.MeshStandardMaterial({
     side: THREE.DoubleSide
 });
 
+// Wave components are uploaded as flat uniform arrays so the component count
+// can change at runtime (swell edits) without recompiling the shader.
+//   uWaveDirAmp[i]     = (dirX, dirZ, amplitude, wavenumber)
+//   uWaveOmegaPhase[i] = (angularFrequency, phaseOffset)
+const waveDirAmpBuf = new Float32Array(MAX_COMPONENTS * 4);
+const waveOmegaPhaseBuf = new Float32Array(MAX_COMPONENTS * 2);
+
 const waterUniforms = {
     uTime: { value: 0 },
-    uWindSpeed: { value: PARAMS.windSpeed },
+    uWindSpeed: { value: 1.0 },
     uWorldOffset: { value: new THREE.Vector2(0, 0) },
     uNoiseTexture: { value: noiseTexture },
     uNoisePeriod: { value: NOISE_GRID_PERIOD },
+    uWaveDirAmp: { value: waveDirAmpBuf },
+    uWaveOmegaPhase: { value: waveOmegaPhaseBuf },
+    uWaveCount: { value: 0 },
+};
+
+/** Push the current wave field into the GPU uniform buffers. */
+function uploadWaveField() {
+    const comps = waveField.components;
+    const n = Math.min(comps.length, MAX_COMPONENTS);
+    for (let i = 0; i < n; i++) {
+        const w = comps[i];
+        waveDirAmpBuf[i * 4] = w.dx;
+        waveDirAmpBuf[i * 4 + 1] = w.dz;
+        waveDirAmpBuf[i * 4 + 2] = w.amp;
+        waveDirAmpBuf[i * 4 + 3] = w.k;
+        waveOmegaPhaseBuf[i * 2] = w.omega;
+        waveOmegaPhaseBuf[i * 2 + 1] = w.phase;
+    }
+    for (let i = n; i < MAX_COMPONENTS; i++) {
+        waveDirAmpBuf[i * 4 + 2] = 0; // zero amplitude = inert
+    }
+    waterUniforms.uWaveCount.value = n;
+
+    // Ripple/micro-normal strength tracks the wind chop swell.
+    const chop = SWELLS[2];
+    waterUniforms.uWindSpeed.value = chop.enabled
+        ? THREE.MathUtils.clamp(chop.height / 0.35, 0.15, 3.0)
+        : 0.15;
+
+    if (comps.length > MAX_COMPONENTS) {
+        console.warn(
+            `Wave field has ${comps.length} components, capped at ${MAX_COMPONENTS}.`
+        );
+    }
+}
+
+uploadWaveField();
+
+// Debug hook: inspect and drive the sim from the browser console.
+// Dev-only — in production this would be a one-line leaderboard cheat.
+if (import.meta.env.DEV) (window as any).__sea = {
+    get field() { return waveField; },
+    get swells() { return SWELLS; },
+    get state() { return gameState; },
+    get foil() { return foilState; },
+    get input() { return input; },
+    get time() { return clock.elapsedTime; },
+    rebuild: () => rebuildWaveField(),
+    launch: () => launchFoil(),
+    reset: () => resetFoilState(),
+    /** Advance physics by a fixed step — deterministic, frame-rate independent. */
+    step: (dt: number, t: number) => updatePhysics(dt, t),
+    height: (x: number, z: number, t: number) => waterHeightFast(waveField, x, z, t),
+    analyse: (i: number, x: number, z: number, t: number) =>
+        analyseSwell(waveField, i, x, z, t),
 };
 
 waterMaterial.onBeforeCompile = (shader) => {
@@ -666,61 +830,27 @@ waterMaterial.onBeforeCompile = (shader) => {
     shader.uniforms.uWorldOffset = waterUniforms.uWorldOffset;
     shader.uniforms.uNoiseTexture = waterUniforms.uNoiseTexture;
     shader.uniforms.uNoisePeriod = waterUniforms.uNoisePeriod;
+    shader.uniforms.uWaveDirAmp = waterUniforms.uWaveDirAmp;
+    shader.uniforms.uWaveOmegaPhase = waterUniforms.uWaveOmegaPhase;
+    shader.uniforms.uWaveCount = waterUniforms.uWaveCount;
 
     shader.vertexShader = `
+        #define MAX_WAVE_COMPONENTS ${MAX_COMPONENTS}
+
         uniform float uTime;
-        uniform float uWindSpeed;
         uniform vec2 uWorldOffset;
+        uniform vec4 uWaveDirAmp[MAX_WAVE_COMPONENTS];
+        uniform vec2 uWaveOmegaPhase[MAX_WAVE_COMPONENTS];
+        uniform int uWaveCount;
 
         varying vec3 vGridPos;
         varying vec3 vViewTangent;
         varying vec3 vViewBinormal;
-
-        struct Wave {
-            vec2 dir;
-            float steepness;
-            float wavelength;
-            float speed;
-        };
-
-        Wave waves[4];
-
-        vec3 gerstnerWave(Wave w, vec3 p, inout vec3 tangent, inout vec3 binormal) {
-            float k = 2.0 * 3.14159 / w.wavelength;
-            float c = sqrt(9.8 / k) * w.speed * uWindSpeed;
-            float d = dot(w.dir, p.xz);
-            float f = k * (d - c * uTime);
-            float effectiveSteepness = w.steepness * uWindSpeed * uWindSpeed;
-            float a = effectiveSteepness / k;
-
-            tangent += vec3(
-                -w.dir.x * w.dir.x * effectiveSteepness * sin(f),
-                w.dir.x * effectiveSteepness * cos(f),
-                -w.dir.x * w.dir.y * effectiveSteepness * sin(f)
-            );
-
-            binormal += vec3(
-                -w.dir.x * w.dir.y * effectiveSteepness * sin(f),
-                w.dir.y * effectiveSteepness * cos(f),
-                -w.dir.y * w.dir.y * effectiveSteepness * sin(f)
-            );
-
-            return vec3(
-                w.dir.x * a * cos(f),
-                a * sin(f),
-                w.dir.y * a * cos(f)
-            );
-        }
     ` + shader.vertexShader;
 
     shader.vertexShader = shader.vertexShader.replace(
         '#include <beginnormal_vertex>',
         `
-        ${waveConfig.map((w, i) => {
-            const f = (v: number) => v % 1 === 0 ? v.toFixed(1) : String(v);
-            return `waves[${i}] = Wave(vec2(${f(w.dir.x)}, ${f(w.dir.y)}), ${f(w.steepness)}, ${f(w.wavelength)}, ${f(w.speed)});`;
-        }).join('\n        ')}
-
         // Use world-space position so waves stay fixed in the world
         // even when the water mesh is moved to follow the player
         vec3 gridPoint = position + vec3(uWorldOffset.x, 0.0, uWorldOffset.y);
@@ -728,10 +858,37 @@ waterMaterial.onBeforeCompile = (shader) => {
         vec3 waveBinormal = vec3(0.0, 0.0, 1.0);
         vec3 p = gridPoint;
 
-        p += gerstnerWave(waves[0], gridPoint, waveTangent, waveBinormal);
-        p += gerstnerWave(waves[1], gridPoint, waveTangent, waveBinormal);
-        p += gerstnerWave(waves[2], gridPoint, waveTangent, waveBinormal);
-        p += gerstnerWave(waves[3], gridPoint, waveTangent, waveBinormal);
+        // Gerstner sum. Must match waterDisplacement() in waves.ts exactly,
+        // otherwise the rider desyncs from the visible surface.
+        for (int i = 0; i < MAX_WAVE_COMPONENTS; i++) {
+            if (i >= uWaveCount) break;
+
+            vec4 da = uWaveDirAmp[i];
+            vec2 dir = da.xy;
+            float a = da.z;
+            float k = da.w;
+            float omega = uWaveOmegaPhase[i].x;
+            float phase = uWaveOmegaPhase[i].y;
+
+            float f = k * dot(dir, gridPoint.xz) - omega * uTime + phase;
+            float sf = sin(f);
+            float cf = cos(f);
+            float steep = a * k;
+
+            p += vec3(dir.x * a * cf, a * sf, dir.y * a * cf);
+
+            waveTangent += vec3(
+                -dir.x * dir.x * steep * sf,
+                 dir.x * steep * cf,
+                -dir.x * dir.y * steep * sf
+            );
+
+            waveBinormal += vec3(
+                -dir.x * dir.y * steep * sf,
+                 dir.y * steep * cf,
+                -dir.y * dir.y * steep * sf
+            );
+        }
 
         vec3 objectNormal = normalize(cross(waveBinormal, waveTangent));
         // Convert displaced world position back to object space
@@ -802,54 +959,19 @@ scene.add(waterMesh);
 
 
 // --- CPU WAVE LOGIC (FOR FOIL PHYSICS) ---
-function getWaterDisplacement(x: number, z: number, time: number, windSpeed: number) {
-    const p = new THREE.Vector3(x, 0, z);
-    const tangent = new THREE.Vector3(1, 0, 0);
-    const binormal = new THREE.Vector3(0, 0, 1);
-
-    for (const w of waveConfig) {
-        const k = 2.0 * Math.PI / w.wavelength;
-        const c = Math.sqrt(9.8 / k) * w.speed * windSpeed;
-        const d = w.dir.x * x + w.dir.y * z;
-        const f = k * (d - c * time);
-        const effectiveSteepness = w.steepness * windSpeed * windSpeed;
-        const a = effectiveSteepness / k;
-
-        p.x += w.dir.x * a * Math.cos(f);
-        p.y += a * Math.sin(f);
-        p.z += w.dir.y * a * Math.cos(f);
-
-        tangent.x -= w.dir.x * w.dir.x * effectiveSteepness * Math.sin(f);
-        tangent.y += w.dir.x * effectiveSteepness * Math.cos(f);
-        tangent.z -= w.dir.x * w.dir.y * effectiveSteepness * Math.sin(f);
-
-        binormal.x -= w.dir.x * w.dir.y * effectiveSteepness * Math.sin(f);
-        binormal.y += w.dir.y * effectiveSteepness * Math.cos(f);
-        binormal.z -= w.dir.y * w.dir.y * effectiveSteepness * Math.sin(f);
-    }
-
-    const normal = new THREE.Vector3().crossVectors(binormal, tangent).normalize();
-    return { position: p, normal };
+// Thin wrappers over the shared wave field so physics reads exactly the surface
+// the vertex shader draws.
+function getSurfaceInfoAtWorldPos(worldX: number, worldZ: number, time: number) {
+    return surfaceAtWorldPos(waveField, worldX, worldZ, time);
 }
 
-function getSurfaceInfoAtWorldPos(worldX: number, worldZ: number, time: number, windSpeed: number) {
-    let testX = worldX;
-    let testZ = worldZ;
-    let info = getWaterDisplacement(testX, testZ, time, windSpeed);
-
-    for (let i = 0; i < 3; i++) {
-        const errX = worldX - info.position.x;
-        const errZ = worldZ - info.position.z;
-        testX += errX;
-        testZ += errZ;
-        info = getWaterDisplacement(testX, testZ, time, windSpeed);
-    }
-    return info;
+function getWaterHeightFast(x: number, z: number, time: number): number {
+    return waterHeightFast(waveField, x, z, time);
 }
 
 
 // --- WAVE SAMPLING (multi-point across wing span) ---
-function sampleWaveAtFoilPoints(time: number, windSpeed: number) {
+function sampleWaveAtFoilPoints(time: number) {
     const dir = headingToDir(foilState.heading);
     const right = new THREE.Vector3(dir.z, 0, -dir.x);
     const halfSpan = activeFoil.wingSpan / 2;
@@ -857,16 +979,16 @@ function sampleWaveAtFoilPoints(time: number, windSpeed: number) {
     const cx = foilState.position.x;
     const cz = foilState.position.z;
 
-    const center = getSurfaceInfoAtWorldPos(cx, cz, time, windSpeed);
+    const center = getSurfaceInfoAtWorldPos(cx, cz, time);
     const leftTip = getSurfaceInfoAtWorldPos(
         cx - right.x * halfSpan,
         cz - right.z * halfSpan,
-        time, windSpeed
+        time
     );
     const rightTip = getSurfaceInfoAtWorldPos(
         cx + right.x * halfSpan,
         cz + right.z * halfSpan,
-        time, windSpeed
+        time
     );
 
     const n = center.normal;
@@ -1142,9 +1264,9 @@ function updateHUD() {
             : `race to ${RACE_LENGTH_KM} km · pump to stay on foil · loading rider…`;
         raceDistancePicker.style.display = 'flex';
         if (isMobile) {
-            hudControls.textContent = 'Tap to launch · Drag to steer';
+            hudControls.textContent = 'Tap to launch · Drag to steer & trim';
         } else {
-            hudControls.textContent = '← → Turn  ·  ↑ ↓ Pitch  ·  SPACE Pump\n\n    Press SPACE to launch?';
+            hudControls.textContent = '← → Turn  ·  ↑ ↓ Foot pressure  ·  SPACE Pump\n\n    Press SPACE to launch';
         }
         hudLeaderboard.innerHTML = cachedTop3HTML;
         hudLeaderboard.style.display = cachedTop3HTML ? '' : 'none';
@@ -1364,7 +1486,57 @@ gui.close();
 gui.add(PARAMS, 'selectedFoil', Object.keys(FOIL_PRESETS)).name('Foil').onChange((v: string) => {
     activeFoil = { ...FOIL_PRESETS[v] };
 });
-gui.add(PARAMS, 'windSpeed', 0.1, 3.0, 0.1).name('Wind / Wave Energy');
+
+// --- SWELL CONTROLS ---
+// Forecast-style inputs: significant height, peak period, direction. Everything
+// downstream (wavelength, crest speed, set speed, set length) is derived from
+// deep-water theory, so the readouts update themselves.
+const swellFolder = gui.addFolder('Sea State');
+
+const swellReadouts: HTMLElement[] = [];
+
+function rebuildWaveField() {
+    waveField = buildWaveField(SWELLS);
+    uploadWaveField();
+    updateSwellReadouts();
+}
+
+function updateSwellReadouts() {
+    for (let i = 0; i < SWELLS.length; i++) {
+        const s = SWELLS[i];
+        const el = swellReadouts[i];
+        if (!el) continue;
+        const lambda = periodToWavelength(s.period);
+        const c = periodToPhaseSpeed(s.period);
+        const cg = c / 2;
+        const groupLen = s.bandwidth > 1e-4 ? lambda / (4 * s.bandwidth) : Infinity;
+        el.textContent = s.enabled
+            ? `λ ${lambda.toFixed(0)} m · crest ${(c * 1.944).toFixed(0)} kt · ` +
+              `set ${(cg * 1.944).toFixed(0)} kt · set len ${groupLen.toFixed(0)} m`
+            : 'off';
+    }
+}
+
+for (let i = 0; i < SWELLS.length; i++) {
+    const s = SWELLS[i];
+    const f = swellFolder.addFolder(s.name);
+    f.add(s, 'enabled').name('Enabled').onChange(rebuildWaveField);
+    f.add(s, 'height', 0, 5, 0.05).name('Height Hs (m)').onChange(rebuildWaveField);
+    f.add(s, 'period', 2, 20, 0.1).name('Period Tp (s)').onChange(rebuildWaveField);
+    f.add(s, 'direction', -90, 90, 1).name('Direction (°)').onChange(rebuildWaveField);
+    f.add(s, 'spread', 0, 60, 1).name('Spread (°)').onChange(rebuildWaveField);
+    f.add(s, 'bandwidth', 0.005, 0.3, 0.005).name('Bandwidth').onChange(rebuildWaveField);
+    f.add(s, 'components', 1, 16, 1).name('Components').onChange(rebuildWaveField);
+
+    // Derived readout line appended under the folder's controls.
+    const readout = document.createElement('div');
+    readout.className = 'swell-readout';
+    f.domElement.querySelector('.children')?.appendChild(readout);
+    swellReadouts.push(readout);
+    f.close();
+}
+updateSwellReadouts();
+
 gui.addColor(PARAMS, 'waterColor').name('Water Color').onChange((c: string) => {
     waterMaterial.color.set(c);
 });
@@ -1426,19 +1598,6 @@ interface WakePoint {
     perpX: number; perpZ: number;
     age: number;
     speedFactor: number;
-}
-
-function getWaterHeightFast(x: number, z: number, time: number, windSpeed: number): number {
-    let y = 0;
-    for (const w of waveConfig) {
-        const k = 2.0 * Math.PI / w.wavelength;
-        const c = Math.sqrt(9.8 / k) * w.speed * windSpeed;
-        const d = w.dir.x * x + w.dir.y * z;
-        const f = k * (d - c * time);
-        const eSteep = w.steepness * windSpeed * windSpeed;
-        y += (eSteep / k) * Math.sin(f);
-    }
-    return y;
 }
 
 const wakePoints: WakePoint[] = [];
@@ -1565,7 +1724,6 @@ function updateWakeTrail(dt: number, time: number) {
     const posAttr = wakeGeom.getAttribute('position') as THREE.BufferAttribute;
     const uvAttr = wakeGeom.getAttribute('uv') as THREE.BufferAttribute;
     const n = wakePoints.length;
-    const ws = PARAMS.windSpeed;
 
     for (let i = 0; i < n; i++) {
         const vi = i * 2;
@@ -1580,8 +1738,8 @@ function updateWakeTrail(dt: number, time: number) {
         const rx = wp.x + wp.perpX * hw;
         const rz = wp.z + wp.perpZ * hw;
 
-        const ly = getWaterHeightFast(lx, lz, time, ws) + WAKE_Y_OFFSET;
-        const ry = getWaterHeightFast(rx, rz, time, ws) + WAKE_Y_OFFSET;
+        const ly = getWaterHeightFast(lx, lz, time) + WAKE_Y_OFFSET;
+        const ry = getWaterHeightFast(rx, rz, time) + WAKE_Y_OFFSET;
 
         posAttr.setXYZ(vi,     lx, ly, lz);
         posAttr.setXYZ(vi + 1, rx, ry, rz);
@@ -1673,7 +1831,6 @@ function updateBubbles(dt: number, time: number) {
         bubbleEmitAccum = 0;
     }
 
-    const ws = PARAMS.windSpeed;
     let anyUpdate = false;
 
     for (let i = 0; i < BUBBLE_MAX; i++) {
@@ -1690,7 +1847,7 @@ function updateBubbles(dt: number, time: number) {
 
         const fade = 1.0 - (b.age / BUBBLE_MAX_AGE);
         const s = b.size * fade;
-        const y = getWaterHeightFast(b.x, b.z, time, ws) - s * 0.5;
+        const y = getWaterHeightFast(b.x, b.z, time) - s * 0.5;
 
         _bubbleMat4.makeScale(s, s, s);
         _bubbleMat4.setPosition(b.x, y, b.z);
@@ -1938,6 +2095,85 @@ function drawGpsMinimap() {
 }
 
 
+// --- INSTRUMENT CLUSTER ---
+// Canvas readouts giving the rider what a real foiler gets through their feet:
+// which bump they are on, where the set is, and whether the foil is trimmed.
+
+const INST_DPR = Math.min(window.devicePixelRatio, 2);
+
+function setupInstCanvas(id: string, w: number, h: number): CanvasRenderingContext2D {
+    const c = document.querySelector(id) as HTMLCanvasElement;
+    c.width = w * INST_DPR;
+    c.height = h * INST_DPR;
+    c.style.width = `${w}px`;
+    c.style.height = `${h}px`;
+    const ctx = c.getContext('2d')!;
+    ctx.scale(INST_DPR, INST_DPR);
+    return ctx;
+}
+
+const INST_WAVETRAIN = { w: 300, h: 108 };
+const INST_SET = { w: 138, h: 112 };
+const INST_RADAR = { w: 118, h: 112 };
+const INST_TRIM = { w: 100, h: 112 };
+
+const instWaveTrainCtx = setupInstCanvas('#inst-wavetrain', INST_WAVETRAIN.w, INST_WAVETRAIN.h);
+const instSetCtx = setupInstCanvas('#inst-set', INST_SET.w, INST_SET.h);
+const instRadarCtx = setupInstCanvas('#inst-radar', INST_RADAR.w, INST_RADAR.h);
+const instTrimCtx = setupInstCanvas('#inst-trim', INST_TRIM.w, INST_TRIM.h);
+
+const instrumentsEl = document.querySelector('#instruments') as HTMLElement;
+const instToggleEl = document.querySelector('#inst-toggle') as HTMLButtonElement;
+
+let instrumentsVisible = true;
+function setInstrumentsVisible(v: boolean) {
+    instrumentsVisible = v;
+    instrumentsEl.classList.toggle('instruments--hidden', !v);
+    instToggleEl.style.opacity = v ? '1' : '0.5';
+}
+instToggleEl.addEventListener('click', () => setInstrumentsVisible(!instrumentsVisible));
+
+const _riderReadout: RiderReadout = {
+    x: 0, z: 0, heading: 0, track: 0, speed: 0, rideHeight: 0,
+    mastLength: MAST_LENGTH, footPressure: 0, footPressureTrim: 0, alpha: 0,
+    loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, roll: 0, onFoil: true,
+};
+
+function drawInstruments(time: number) {
+    if (!instrumentsVisible) return;
+
+    const r = _riderReadout;
+    r.x = foilState.position.x;
+    r.z = foilState.position.z;
+    r.heading = foilState.heading;
+    r.track = foilState.speed > 0.5
+        ? Math.atan2(foilState.velocity.x, foilState.velocity.z)
+        : foilState.heading;
+    r.speed = foilState.speed;
+    r.rideHeight = foilState.rideHeight;
+    r.footPressure = foilState.footPressure;
+    r.footPressureTrim = foilState.footPressureTrim;
+    r.alpha = foilState.alpha;
+    r.loadFactor = foilState.loadFactor;
+    r.wingDepth = foilState.wingDepth;
+    r.ventFactor = foilState.ventFactor;
+    r.orbitalW = foilState.orbitalW;
+    r.roll = foilState.roll;
+    r.onFoil = foilState.onFoil;
+
+    // Instrument the swell that is actually biggest under the rider right now.
+    const dom = dominantSwell(waveField, r.x, r.z, time);
+    const si = dom.index >= 0 ? dom.index : 0;
+
+    drawWaveTrain(instWaveTrainCtx, INST_WAVETRAIN.w, INST_WAVETRAIN.h,
+        waveField, r, time, { behind: 120, ahead: 220, swellIndex: si });
+    drawSetMeter(instSetCtx, INST_SET.w, INST_SET.h, waveField, r, time, si);
+    drawSwellRadar(instRadarCtx, INST_RADAR.w, INST_RADAR.h, waveField,
+        SWELLS.map(s => s.name), SWELLS.map(s => s.enabled), r);
+    drawTrimGauge(instTrimCtx, INST_TRIM.w, INST_TRIM.h, r);
+}
+
+
 // --- RACE MARKERS ---
 // All buoys and the finish gate are centred on `raceTrackX`, which smoothly
 // tracks the player's lateral (X) position.  Each buoy stores its relative
@@ -2099,6 +2335,9 @@ window.addEventListener('keydown', (e) => {
                 resetFoilState();
             }
             break;
+        case 'KeyI':
+            setInstrumentsVisible(!instrumentsVisible);
+            break;
         case 'KeyC':
             useChaseCamera = !useChaseCamera;
             controls.enabled = !useChaseCamera;
@@ -2136,16 +2375,20 @@ function updatePhysics(dt: number, time: number) {
         if (input.right) targetRoll = -MAX_ROLL;
     }
 
-    let targetPitch = 0;
+    // Fore/aft weight shift. Back foot (+) raises the nose and the angle of
+    // attack; front foot (-) drops it.
+    let targetFoot = 0;
     if (input.pitchY !== 0) {
-        targetPitch = -input.pitchY * MAX_PITCH;
+        targetFoot = -input.pitchY;
     } else {
-        if (input.up) targetPitch = MAX_PITCH;
-        if (input.down) targetPitch = -MAX_PITCH;
+        if (input.up) targetFoot = 1;
+        if (input.down) targetFoot = -1;
     }
+    foilState.footPressure +=
+        (targetFoot - foilState.footPressure) * Math.min(1, FOOT_RESPONSE * dt);
 
     // Sample wave surface at center and both wingtips
-    const wave = sampleWaveAtFoilPoints(time, PARAMS.windSpeed);
+    const wave = sampleWaveAtFoilPoints(time);
 
     // Wave-induced roll torque from height difference across wingspan
     const heightDiff = wave.rightTip.position.y - wave.leftTip.position.y;
@@ -2158,13 +2401,52 @@ function updatePhysics(dt: number, time: number) {
     foilState.roll += foilState.rollRate * dt;
     foilState.roll = THREE.MathUtils.clamp(foilState.roll, -MAX_ROLL * 1.2, MAX_ROLL * 1.2);
 
-    // Pitch spring
-    foilState.pitch += (targetPitch - foilState.pitch) * 5.0 * dt;
+    // Board attitude follows foot pressure (visual + used for wave-relative trim)
+    foilState.pitch += (foilState.footPressure * MAX_PITCH - foilState.pitch) * 5.0 * dt;
 
-    // --- Lift force ---
-    const clFactor = smoothstep(foil.stallSpeed * 0.7, foil.stallSpeed * 1.3, speed);
-    const CL = foil.maxLiftCoeff * clFactor;
-    const liftMag = 0.5 * RHO_WATER * speed * speed * CL * foil.wingArea;
+    // --- Foil flight: angle of attack drives lift ---
+    // Wing depth below the surface. rideHeight is the board above the water, so
+    // the wing sits (mast - rideHeight) down. Fly too high and it ventilates.
+    const wingDepth = Math.max(0, MAST_LENGTH - foilState.rideHeight);
+    const ventFactor = smoothstep(0.03, VENT_DEPTH, wingDepth);
+
+    // Vertical water motion at the wing adds angle of attack for free — this is
+    // what lets you hold flight on the right part of a bump without pumping.
+    const orbitalW = verticalOrbitalVelocity(
+        waveField, foilState.position.x, foilState.position.z, time, wingDepth
+    );
+
+    // Inflow angle: climbing reduces AoA, rising water increases it. This
+    // feedback is what makes the foil naturally self-damping (and porpoise).
+    const vRef = Math.max(speed, 1.5);
+    const inflowAngle = Math.atan2(foilState.vy - orbitalW, vRef);
+    const alphaTrim = ALPHA_NEUTRAL + foilState.footPressure * ALPHA_RANGE;
+    let alpha = alphaTrim - inflowAngle;
+
+    // Finite-wing lift slope (lifting-line): CL_alpha = 2*pi*AR / (AR + 2)
+    const clAlpha = (2 * Math.PI * foil.aspectRatio) / (foil.aspectRatio + 2);
+    // Soft stall: CL rolls off past ALPHA_STALL instead of climbing forever.
+    const alphaEff = Math.sign(alpha) *
+        Math.min(Math.abs(alpha), ALPHA_STALL) *
+        (1 - 0.7 * smoothstep(ALPHA_STALL, ALPHA_STALL * 1.6, Math.abs(alpha)));
+    const CL = clAlpha * alphaEff;
+
+    const liftMag = 0.5 * RHO_WATER * speed * speed * CL * foil.wingArea * ventFactor;
+
+    foilState.alpha = alpha;
+    foilState.wingDepth = wingDepth;
+    foilState.ventFactor = ventFactor;
+    foilState.orbitalW = orbitalW;
+    foilState.loadFactor = liftMag / (RIDER_MASS * GRAVITY);
+
+    // Foot pressure that would exactly hold altitude at this speed — the marker
+    // the player chases on the trim gauge.
+    const clNeeded = (RIDER_MASS * GRAVITY) /
+        Math.max(0.5 * RHO_WATER * speed * speed * foil.wingArea * Math.max(ventFactor, 0.05), 1e-3);
+    const alphaNeeded = clNeeded / clAlpha;
+    foilState.footPressureTrim = THREE.MathUtils.clamp(
+        (alphaNeeded + inflowAngle - ALPHA_NEUTRAL) / ALPHA_RANGE, -1.5, 1.5
+    );
 
     // --- Drag force ---
     const inducedCD = (CL * CL) / (Math.PI * foil.aspectRatio * 0.85);
@@ -2205,7 +2487,7 @@ function updatePhysics(dt: number, time: number) {
         foilState.velocity.addScaledVector(pumpDir, PUMP_IMPULSE);
         foilState.energy -= PUMP_COST;
         foilState.lastPumpTime = time;
-        foilState.rideHeight = Math.min(foilState.rideHeight + 0.05, MAST_LENGTH);
+        foilState.vy += 0.35;
         triggerPumpAnim();
         input.pump = false;
     }
@@ -2230,45 +2512,54 @@ function updatePhysics(dt: number, time: number) {
     foilState.position.addScaledVector(foilState.velocity, dt);
     foilState.distanceTravelled += speed * dt;
 
-    // --- Ride height: spring-damper seeking target based on lift-to-weight ratio ---
-    const liftRatio = liftMag / (RIDER_MASS * GRAVITY);
-    const targetHeight = THREE.MathUtils.clamp(
-        (liftRatio - 0.8) / 1.2 * MAST_LENGTH * 0.8,
-        0,
-        MAST_LENGTH
+    // --- Vertical flight dynamics ---
+    // Integrated in the WORLD frame, not relative to the water. Ride height is
+    // then derived by subtracting the surface, which is itself heaving and
+    // sliding underneath the rider. Getting this wrong makes the board fall
+    // through the surface every time a wave lifts under it.
+    const verticalLift = liftMag * Math.cos(foilState.roll);
+    const heaveAccel =
+        (verticalLift - RIDER_MASS * GRAVITY) / RIDER_MASS
+        - foilState.vy * HEAVE_DAMPING;
+
+    foilState.vy += heaveAccel * dt;
+    foilState.worldY += foilState.vy * dt;
+
+    // Re-sample the surface at the position we just moved to, so ride height is
+    // measured against the water actually under the board this frame.
+    const surfaceNow = getSurfaceInfoAtWorldPos(
+        foilState.position.x, foilState.position.z, time
     );
+    foilState.surfaceY = surfaceNow.position.y;
+    foilState.rideHeight = foilState.worldY - foilState.surfaceY;
 
-    const pitchBias = foilState.pitch * 0.3;
-    const effectiveTarget = THREE.MathUtils.clamp(targetHeight + pitchBias, 0, MAST_LENGTH);
-
-    const heightError = effectiveTarget - foilState.rideHeight;
-    const heightAccel = heightError * HEIGHT_SPRING - foilState.rideHeightVel * HEIGHT_DAMPING;
-    foilState.rideHeightVel += heightAccel * dt;
-    foilState.rideHeight += foilState.rideHeightVel * dt;
-
-    // Minimum ride height floor: if lift is strong enough to foil, don't let height collapse
-    const minRideHeight = liftRatio > 1.0 ? 0.12 : 0;
-    foilState.rideHeight = Math.max(minRideHeight, Math.min(MAST_LENGTH, foilState.rideHeight));
+    // The board cannot rise past the mast — the wing would be out of the water.
+    if (foilState.rideHeight > MAST_LENGTH) {
+        foilState.rideHeight = MAST_LENGTH;
+        foilState.worldY = foilState.surfaceY + MAST_LENGTH;
+        if (foilState.vy > 0) foilState.vy = 0;
+    }
 
     foilState.speed = foilState.velocity.length();
 
     // --- Check crash ---
-    // Hard floor: physically on the water
     if (foilState.rideHeight <= 0.001) {
-        foilState.rideHeight = 0;
-        foilState.onFoil = false;
-        foilState.speed = 0;
-        foilState.velocity.set(0, 0, 0);
-        gameState = 'crashed';
+        // Board has hit the water.
+        crashFoil(foilState.speed < foil.stallSpeed * 0.8 ? 'stall' : 'touchdown');
+    } else if (wingDepth < 0.04 && foilState.vy - foilState.orbitalW > 0.2) {
+        // Wing has come out of the water while still climbing — a breach.
+        crashFoil('breach');
     }
-    // Too low and too slow to recover — mast nearly submerged + below stall speed
-    else if (foilState.rideHeight < 0.05 && foilState.speed < foil.stallSpeed) {
-        foilState.rideHeight = 0;
-        foilState.onFoil = false;
-        foilState.speed = 0;
-        foilState.velocity.set(0, 0, 0);
-        gameState = 'crashed';
-    }
+}
+
+function crashFoil(reason: 'breach' | 'touchdown' | 'stall') {
+    foilState.rideHeight = 0;
+    foilState.vy = 0;
+    foilState.onFoil = false;
+    foilState.speed = 0;
+    foilState.velocity.set(0, 0, 0);
+    foilState.crashReason = reason;
+    gameState = 'crashed';
 }
 
 
@@ -2329,8 +2620,7 @@ function updateBoardVisuals(time: number) {
     const wave = getSurfaceInfoAtWorldPos(
         foilState.position.x,
         foilState.position.z,
-        time,
-        PARAMS.windSpeed
+        time
     );
 
     if (gameState === 'starting') {
@@ -2426,7 +2716,6 @@ function animate() {
 
     // Update GPU water
     waterUniforms.uTime.value = time;
-    waterUniforms.uWindSpeed.value = PARAMS.windSpeed;
 
     // Move water mesh to follow player — shader uses uWorldOffset to keep
     // waves world-space correct so the ocean looks infinite.
@@ -2447,20 +2736,20 @@ function animate() {
 
     // Bob buoys on the water surface and apply lateral tracking
     {
-        const ws = PARAMS.windSpeed;
         for (const buoy of raceBuoys) {
             const bx = raceTrackX + buoy.relativeX;
             buoy.group.position.x = bx;
-            buoy.group.position.y = getWaterHeightFast(bx, buoy.baseZ, time, ws);
+            buoy.group.position.y = getWaterHeightFast(bx, buoy.baseZ, time);
         }
         // Finish gate — same lateral centre, just bob on waves
         finishGate.position.x = raceTrackX;
-        finishGate.position.y = getWaterHeightFast(raceTrackX, FINISH_Z, time, ws);
+        finishGate.position.y = getWaterHeightFast(raceTrackX, FINISH_Z, time);
     }
 
     // GPS minimap
     sampleGpsPoint(time);
     drawGpsMinimap();
+    drawInstruments(time);
 
     // Wake trail
     updateWakeTrail(dt, time);

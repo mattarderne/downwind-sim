@@ -533,13 +533,79 @@ canvas {
   border-radius: 10px;
 }
 
+/* ---------- instrument cluster ---------- */
+#instruments {
+  position: fixed;
+  right: 16px;
+  top: 92px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+#inst-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+#instruments canvas {
+  display: block;
+  border-radius: 10px;
+}
+
+#instruments.instruments--hidden {
+  display: none;
+}
+
+#inst-toggle {
+  position: fixed;
+  right: 16px;
+  top: 60px;
+  z-index: 101;
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(0, 18, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+#inst-toggle:hover {
+  color: #fff;
+  background: rgba(0, 30, 60, 0.85);
+}
+
+/* lil-gui derived-value readout under each swell folder */
+.swell-readout {
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 3px 8px 6px 8px;
+}
+
 /* ---------- mobile: hide desktop-only UI ---------- */
 @media (max-width: 768px), (pointer: coarse) {
-  .lil-gui {
-    display: none !important;
-  }
   #gps-minimap {
     display: none !important;
+  }
+  /* Instruments stay but shrink into a compact stacked column. */
+  #instruments {
+    right: 8px;
+    top: 74px;
+    gap: 6px;
+    transform: scale(0.78);
+    transform-origin: top right;
+  }
+  #inst-toggle {
+    right: 8px;
+    top: 40px;
   }
 }
 
