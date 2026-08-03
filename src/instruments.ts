@@ -31,7 +31,12 @@ export interface RiderReadout {
     ventFactor: number;
     orbitalW: number;
     roll: number;
+    pitch: number;
     onFoil: boolean;
+    /** Water surface height under the board, m — the datum for the side view. */
+    surfaceHeight: number;
+    /** Wing depth below which ventilation starts, m. */
+    ventDepth: number;
 }
 
 const FG = 'rgba(255,255,255,0.85)';
@@ -43,7 +48,6 @@ const BORDER = 'rgba(255,255,255,0.12)';
 const GREEN = '#4ade80';
 const AMBER = '#fbbf24';
 const RED = '#ef5350';
-const BLUE = '#3c8cff';
 
 function panel(ctx: CanvasRenderingContext2D, w: number, h: number) {
     ctx.clearRect(0, 0, w, h);
@@ -379,105 +383,229 @@ export function drawSwellRadar(
 // --- TRIM / FOOT PRESSURE ---------------------------------------------------
 
 /**
- * Fore/aft foot pressure against the pressure needed to hold altitude.
+ * Trim and height, side by side.
  *
- * Back foot raises angle of attack: you climb, and if the wing reaches the
- * surface it ventilates and you breach. Front foot drops the nose: you sink,
- * and the board touches down. The hollow marker is the trim that would hold
- * you level right now — bring the solid bar to it.
+ * Left: fore/aft foot pressure. Laid out to match what you are looking at —
+ * the camera sits behind the rider, so the nose is up-screen and the tail is
+ * down-screen, and the gauge runs the same way. Front foot at the top drops
+ * the nose toward the water; back foot at the bottom raises the angle of
+ * attack and lifts you toward a breach. The green line is the trim that would
+ * hold altitude right now; bring the bar to it.
+ *
+ * Right: a side elevation of the board on its mast against the water, because
+ * a number in centimetres does not tell you how close you are to either limit.
  */
 export function drawTrimGauge(
     ctx: CanvasRenderingContext2D,
     w: number, h: number,
-    rider: RiderReadout
+    field: WaveField,
+    rider: RiderReadout,
+    time: number
 ) {
     panel(ctx, w, h);
 
-    const padT = 20, padB = 26;
-    const trackX = w * 0.36;
-    const trackTop = padT;
-    const trackH = h - padT - padB;
-    const trackW = 14;
-    const midY = trackTop + trackH / 2;
+    const padT = 22;
+    const padB = 30;
+    const colH = h - padT - padB;
 
     label(ctx, 'TRIM', 8, 12, DIM);
+    label(ctx, 'HEIGHT', w - 8, 12, DIM, 'right');
 
-    // Track
+    // --- Left column: fore/aft trim ---------------------------------------
+    const trackW = 13;
+    const trackX = 16;
+    const trackTop = padT;
+    const midY = trackTop + colH / 2;
+
     ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, colH, 6); ctx.fill();
+
+    // Danger bands. Top = front foot = nose down = touchdown.
+    // Bottom = back foot = nose up = breach.
+    const zone = colH * 0.2;
+    ctx.fillStyle = 'rgba(239,83,80,0.2)';
+    ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, zone, [6, 6, 0, 0]); ctx.fill();
     ctx.beginPath();
-    ctx.roundRect(trackX, trackTop, trackW, trackH, 7);
+    ctx.roundRect(trackX, trackTop + colH - zone, trackW, zone, [0, 0, 6, 6]);
     ctx.fill();
 
-    // Danger zones at each end
-    const zone = trackH * 0.22;
-    ctx.fillStyle = 'rgba(239,83,80,0.22)';
-    ctx.beginPath(); ctx.roundRect(trackX, trackTop, trackW, zone, [7, 7, 0, 0]); ctx.fill();
-    ctx.beginPath();
-    ctx.roundRect(trackX, trackTop + trackH - zone, trackW, zone, [0, 0, 7, 7]);
-    ctx.fill();
-
-    // Centre line
     ctx.strokeStyle = FAINT;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(trackX - 3, midY); ctx.lineTo(trackX + trackW + 3, midY);
     ctx.stroke();
 
-    const toY = (p: number) => midY - Math.max(-1, Math.min(1, p)) * (trackH / 2);
+    // NOTE the sign: +1 is back foot and sits at the BOTTOM, matching the view
+    // down the board from the chase camera.
+    const toY = (p: number) => midY + Math.max(-1, Math.min(1, p)) * (colH / 2);
 
-    // Trim target — where the player should be
     const ty = toY(rider.footPressureTrim);
     ctx.strokeStyle = GREEN;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(trackX - 5, ty);
-    ctx.lineTo(trackX + trackW + 5, ty);
+    ctx.moveTo(trackX - 5, ty); ctx.lineTo(trackX + trackW + 5, ty);
     ctx.stroke();
 
-    // Current foot pressure
     const py = toY(rider.footPressure);
     const err = Math.abs(rider.footPressure - rider.footPressureTrim);
-    const knobColor = err < 0.25 ? GREEN : err < 0.6 ? AMBER : RED;
-    ctx.fillStyle = knobColor;
+    ctx.fillStyle = err < 0.25 ? GREEN : err < 0.6 ? AMBER : RED;
+    ctx.beginPath(); ctx.roundRect(trackX - 2, py - 3.5, trackW + 4, 7, 3); ctx.fill();
+
+    label(ctx, 'FRONT', trackX + trackW / 2, trackTop - 4, DIM, 'center', 8);
+    label(ctx, 'BACK', trackX + trackW / 2, trackTop + colH + 9, DIM, 'center', 8);
+
+    // --- Right column: side elevation of the rig against the water ---------
+    const dx0 = 52;
+    const dw = w - dx0 - 8;
+    const dcx = dx0 + dw / 2;
+
+    // Show one mast length above the surface and one below.
+    const span = rider.mastLength * 1.15;
+    const scale = colH / (span * 2);
+    const waterY = trackTop + colH / 2;
+    const mToPx = (m: number) => waterY - m * scale;
+
+    ctx.save();
     ctx.beginPath();
-    ctx.roundRect(trackX - 2, py - 3.5, trackW + 4, 7, 3);
+    ctx.rect(dx0, trackTop - 6, dw, colH + 12);
+    ctx.clip();
+
+    // Water body, with the real local surface shape across a few metres
+    const dirX = Math.sin(rider.heading);
+    const dirZ = Math.cos(rider.heading);
+    const HALF_M = 7;
+    const steps = 22;
+    const surfPx: number[] = [];
+    for (let i = 0; i <= steps; i++) {
+        const s = -HALF_M + (i / steps) * HALF_M * 2;
+        const hgt = waterHeightFast(field, rider.x + dirX * s, rider.z + dirZ * s, time);
+        // Draw relative to the surface under the board so the board reads as
+        // sitting at exactly rideHeight above the line beneath it.
+        surfPx.push(hgt - rider.surfaceHeight);
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(dx0, mToPx(surfPx[0]));
+    for (let i = 1; i <= steps; i++) {
+        ctx.lineTo(dx0 + (i / steps) * dw, mToPx(surfPx[i]));
+    }
+    ctx.lineTo(dx0 + dw, trackTop + colH + 12);
+    ctx.lineTo(dx0, trackTop + colH + 12);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(60,140,255,0.20)';
     ctx.fill();
 
-    label(ctx, 'BACK', trackX + trackW + 8, trackTop + 8, DIM, 'left', 8);
-    label(ctx, 'FRONT', trackX + trackW + 8, trackTop + trackH, DIM, 'left', 8);
-
-    // Ride height column: shows the flight band between breach and touchdown.
-    const hx = w - 26;
-    const hTop = padT;
-    const hH = trackH;
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    ctx.beginPath(); ctx.roundRect(hx, hTop, 10, hH, 5); ctx.fill();
-
-    const ventFrac = 1 - 0.22 / rider.mastLength; // top band where wing ventilates
-    ctx.fillStyle = 'rgba(239,83,80,0.22)';
+    ctx.strokeStyle = 'rgba(120,190,255,0.75)';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(hx, hTop, 10, hH * (1 - ventFrac), [5, 5, 0, 0]);
+    ctx.moveTo(dx0, mToPx(surfPx[0]));
+    for (let i = 1; i <= steps; i++) ctx.lineTo(dx0 + (i / steps) * dw, mToPx(surfPx[i]));
+    ctx.stroke();
+
+    // Ventilation band: wing inside this depth of the surface starts losing grip
+    ctx.fillStyle = 'rgba(239,83,80,0.16)';
+    ctx.fillRect(dx0, mToPx(0), dw, rider.ventDepth * scale);
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(239,83,80,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(dx0, mToPx(-rider.ventDepth));
+    ctx.lineTo(dx0 + dw, mToPx(-rider.ventDepth));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // --- The rig, side on, nose to the right ------------------------------
+    // Board, mast, fuselage, front wing and stabiliser are one rigid body, so
+    // the whole assembly pitches together. The mast is offset aft of board
+    // centre and the fuselage carries a stab, so it reads as a foil rather
+    // than a plain T.
+    const boardY = mToPx(rider.rideHeight);
+    const breaching = rider.ventFactor < 0.6;
+    const rigColor = breaching ? RED : rider.rideHeight < 0.1 ? AMBER : '#fff';
+
+    const mastX = dcx - dw * 0.12;              // aft of centre
+    const mastPx = rider.mastLength * scale;
+
+    // Pitch and AoA are amplified so small trim changes stay legible here.
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    const pitchVis = clamp(-rider.pitch * 3.2, -0.45, 0.45);
+    const aoaVis = clamp(-rider.alpha * 3.5, -0.5, 0.5);
+    const wingColor = Math.abs(rider.alpha) > 0.16 ? RED
+        : Math.abs(rider.alpha) > 0.10 ? AMBER : rigColor;
+
+    ctx.save();
+    ctx.translate(mastX, boardY);
+    ctx.rotate(pitchVis);
+
+    // Board — tail left, nose right with a little rocker
+    ctx.fillStyle = rigColor;
+    ctx.beginPath();
+    ctx.moveTo(-dw * 0.20, -4.5);
+    ctx.lineTo(dw * 0.26, -4.5);
+    ctx.quadraticCurveTo(dw * 0.35, -4.2, dw * 0.38, -1.2);
+    ctx.lineTo(dw * 0.33, 0.6);
+    ctx.lineTo(-dw * 0.20, 0.6);
+    ctx.closePath();
     ctx.fill();
 
-    const frac = Math.max(0, Math.min(1, rider.rideHeight / rider.mastLength));
-    const fy = hTop + hH * (1 - frac);
-    ctx.fillStyle = rider.ventFactor < 0.6 ? RED : frac < 0.15 ? AMBER : BLUE;
-    ctx.beginPath(); ctx.roundRect(hx - 2, fy - 3, 14, 6, 3); ctx.fill();
-    label(ctx, 'HT', hx + 5, hTop - 6, DIM, 'center', 8);
+    // Mast
+    ctx.strokeStyle = rigColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, mastPx);
+    ctx.stroke();
 
-    // Status line
+    // Fuselage
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-dw * 0.14, mastPx);
+    ctx.lineTo(dw * 0.17, mastPx);
+    ctx.stroke();
+
+    // Front wing, forward on the fuselage, tilted by angle of attack
+    ctx.save();
+    ctx.translate(dw * 0.17, mastPx);
+    ctx.rotate(aoaVis);
+    ctx.fillStyle = wingColor;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, dw * 0.18, 2.0, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Rear stabiliser
+    ctx.save();
+    ctx.translate(-dw * 0.14, mastPx);
+    ctx.rotate(aoaVis);
+    ctx.fillStyle = wingColor;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, dw * 0.075, 1.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.restore();
+
+    ctx.restore();
+
+    // Height callout
+    label(
+        ctx, `${(rider.rideHeight * 100).toFixed(0)} cm`,
+        dcx, mToPx(rider.rideHeight) - 8,
+        breaching ? RED : FG, 'center', 9
+    );
+
+    // --- Status ------------------------------------------------------------
     let msg = 'trimmed';
     let msgColor = GREEN;
-    if (rider.ventFactor < 0.55) { msg = 'BREACHING'; msgColor = RED; }
-    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING'; msgColor = RED; }
+    if (breaching) { msg = 'BREACHING — front foot'; msgColor = RED; }
+    else if (rider.rideHeight < 0.1) { msg = 'TOUCHING — back foot'; msgColor = RED; }
     else if (rider.footPressure - rider.footPressureTrim > 0.3) { msg = 'ease forward'; msgColor = AMBER; }
     else if (rider.footPressureTrim - rider.footPressure > 0.3) { msg = 'more back foot'; msgColor = AMBER; }
-    label(ctx, msg, w / 2, h - 12, msgColor, 'center', 9);
+    label(ctx, msg, w / 2, h - 14, msgColor, 'center', 9);
 
-    // Angle of attack readout
     label(
         ctx,
-        `AoA ${(rider.alpha * 180 / Math.PI).toFixed(1)}°  ${rider.loadFactor.toFixed(2)}g`,
-        w / 2, h - 2, DIM, 'center', 8
+        `AoA ${(rider.alpha * 180 / Math.PI).toFixed(1)}°   ${rider.loadFactor.toFixed(2)}g`,
+        w / 2, h - 4, DIM, 'center', 8
     );
 }

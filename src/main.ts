@@ -424,23 +424,37 @@ type SwellSize = 'small' | 'medium' | 'large';
 
 // Size presets per swell system, as (significant height, peak period). Bigger
 // swell runs longer period too, the way a real sea state scales.
+// Period, not height, decides whether a wave is ridable. Crest speed is
+// c = g*T/2pi, so an 8 s wave runs at 24 kt and a 13 s wave at 39 kt — both
+// faster than a foiler, so they just roll underneath. Matching a 9-10 m/s
+// rider means T ~ 5-7 s, which is 40-75 m between bumps. That is the band
+// people actually downwind in, so the primary swell lives there.
 const SWELL_SIZES: Record<SwellSize, { height: number; period: number }>[] = [
-    {   // Primary — the bumps you actually ride
-        small: { height: 1.2, period: 7.0 },
-        medium: { height: 2.0, period: 8.0 },
-        large: { height: 3.0, period: 9.0 },
+    {   // Primary — the bumps you actually ride. Kept in the catchable band.
+        small: { height: 1.0, period: 5.0 },   // 39 m, 15 kt crests
+        medium: { height: 1.8, period: 6.0 },  // 56 m, 18 kt crests
+        large: { height: 2.8, period: 7.0 },   // 76 m, 21 kt crests
     },
-    {   // Secondary — longer-period groundswell crossing through
-        small: { height: 0.6, period: 11.0 },
-        medium: { height: 1.1, period: 13.0 },
-        large: { height: 1.9, period: 15.0 },
+    {   // Secondary — groundswell you ride over, not on. It modulates the
+        // primary rather than being ridable itself.
+        small: { height: 0.5, period: 10.0 },
+        medium: { height: 0.9, period: 12.0 },
+        large: { height: 1.5, period: 14.0 },
     },
     {   // Wind chop — texture underfoot
         small: { height: 0.25, period: 2.8 },
-        medium: { height: 0.5, period: 3.2 },
-        large: { height: 0.95, period: 3.8 },
+        medium: { height: 0.45, period: 3.2 },
+        large: { height: 0.8, period: 3.8 },
     },
 ];
+
+/** How a swell's crest speed compares with a foiler's realistic top speed. */
+function ridability(period: number): { text: string; color: string } {
+    const kt = periodToPhaseSpeed(period) * 1.944;
+    if (kt <= 22) return { text: 'rideable', color: '#4ade80' };
+    if (kt <= 30) return { text: 'hard to catch', color: '#fbbf24' };
+    return { text: 'rolls under you', color: '#ef5350' };
+}
 
 const swellSize: SwellSize[] = ['medium', 'medium', 'medium'];
 const SWELL_COLORS = ['#60a5fa', '#a78bfa', '#94a3b8'];
@@ -1640,9 +1654,11 @@ function renderSwellPanel() {
 
         const lambda = periodToWavelength(s.period);
         const c = periodToPhaseSpeed(s.period);
-        row.querySelector('[data-role="meta"]')!.textContent =
-            `${s.height.toFixed(1)} m @ ${s.period.toFixed(0)} s · λ ${lambda.toFixed(0)} m · ` +
-            `crest ${(c * 1.944).toFixed(0)} kt · set ${(c / 2 * 1.944).toFixed(0)} kt`;
+        const rid = ridability(s.period);
+        row.querySelector('[data-role="meta"]')!.innerHTML =
+            `${s.height.toFixed(1)} m @ ${s.period.toFixed(0)} s · λ ${lambda.toFixed(0)} m<br>` +
+            `crest ${(c * 1.944).toFixed(0)} kt · set ${(c / 2 * 1.944).toFixed(0)} kt · ` +
+            `<span style="color:${rid.color}">${rid.text}</span>`;
     });
 
     // Combined sea state: variances add, so Hs adds in quadrature.
@@ -2250,7 +2266,7 @@ function setupInstCanvas(id: string, w: number, h: number): CanvasRenderingConte
 const INST_WAVETRAIN = { w: 320, h: 112 };
 const INST_SET = { w: 152, h: 112 };
 const INST_RADAR = { w: 160, h: 112 };
-const INST_TRIM = { w: 126, h: 172 };
+const INST_TRIM = { w: 168, h: 190 };
 
 // How far the wave train looks ahead/behind. Cycled by clicking the panel:
 // ~1 set length by default so the group structure is visible.
@@ -2288,7 +2304,8 @@ instToggleEl.addEventListener('click', () => setInstrumentsVisible(!instrumentsV
 const _riderReadout: RiderReadout = {
     x: 0, z: 0, heading: 0, track: 0, speed: 0, rideHeight: 0,
     mastLength: MAST_LENGTH, footPressure: 0, footPressureTrim: 0, alpha: 0,
-    loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, roll: 0, onFoil: true,
+    loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, roll: 0, pitch: 0,
+    onFoil: true, surfaceHeight: 0, ventDepth: VENT_DEPTH,
 };
 
 function drawInstruments(time: number) {
@@ -2311,7 +2328,9 @@ function drawInstruments(time: number) {
     r.ventFactor = foilState.ventFactor;
     r.orbitalW = foilState.orbitalW;
     r.roll = foilState.roll;
+    r.pitch = foilState.pitch;
     r.onFoil = foilState.onFoil;
+    r.surfaceHeight = foilState.surfaceY;
 
     // Instrument the swell that is actually biggest under the rider right now.
     const dom = dominantSwell(waveField, r.x, r.z, time);
@@ -2323,7 +2342,7 @@ function drawInstruments(time: number) {
     drawSetMeter(instSetCtx, INST_SET.w, INST_SET.h, waveField, r, time, si);
     drawSwellRadar(instRadarCtx, INST_RADAR.w, INST_RADAR.h, waveField,
         SWELLS.map(s => s.name), SWELLS.map(s => s.enabled), r);
-    drawTrimGauge(instTrimCtx, INST_TRIM.w, INST_TRIM.h, r);
+    drawTrimGauge(instTrimCtx, INST_TRIM.w, INST_TRIM.h, waveField, r, time);
 }
 
 
