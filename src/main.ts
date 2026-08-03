@@ -47,49 +47,51 @@ const PARAMS = {
     hemiIntensity: 20.0,
     dirIntensity: 0.5,  
     showWireframe: false,
-    selectedFoil: 'High Aspect Race',
+    selectedFoil: 'Downwind 900',
     chaseCamera: true,
 };
 
 // --- FOIL CONFIGURATION ---
 interface FoilConfig {
     name: string;
-    wingSpan: number;       // meters
+    wingSpan: number;       // m
     wingArea: number;       // m^2
-    chord: number;          // meters (avg chord = area / span)
+    chord: number;          // m, mean = area / span
     aspectRatio: number;    // span^2 / area
-    stallSpeed: number;     // m/s, below this lift collapses
-    maxLiftCoeff: number;   // CL at full speed
-    baseDragCoeff: number;  // CD_0
-    turnRateMax: number;    // rad/s, inversely proportional to span
+    baseDragCoeff: number;  // CD_0 of the section
+    turnRateMax: number;    // rad/s, falls with span and aspect ratio
+}
+
+// Area in cm^2 is how foils are actually sold, so it names the presets.
+// Aspect ratio is span^2/area, and it drives everything else through the
+// lifting-line slope 2*pi*AR/(AR+2): higher AR lifts harder per degree and
+// carries less induced drag, at the cost of turning and low-speed manners.
+function makeFoil(
+    name: string, span: number, areaCm2: number, cd0: number, turn: number
+): FoilConfig {
+    const area = areaCm2 / 10000;
+    return {
+        name,
+        wingSpan: span,
+        wingArea: area,
+        chord: area / span,
+        aspectRatio: (span * span) / area,
+        baseDragCoeff: cd0,
+        turnRateMax: turn,
+    };
 }
 
 const FOIL_PRESETS: Record<string, FoilConfig> = {
-    'High Aspect Race': {
-        name: 'High Aspect Race',
-        wingSpan: 1.0,
-        wingArea: 0.08,       // 800 cm^2
-        chord: 0.08,
-        aspectRatio: 12.5,
-        stallSpeed: 7.0,
-        maxLiftCoeff: 0.5,
-        baseDragCoeff: 0.008,
-        turnRateMax: 2,
-    },
-    'Mid Aspect Cruise': {
-        name: 'Mid Aspect Cruise',
-        wingSpan: 1.2,
-        wingArea: 0.234,      // ~2340 cm^2
-        chord: 0.195,
-        aspectRatio: 6.15,
-        stallSpeed: 4.0,
-        maxLiftCoeff: 0.5,
-        baseDragCoeff: 0.010,
-        turnRateMax: 0.6,
-    },
+    'Beginner 1600':   makeFoil('Beginner 1600',   1.15, 1600, 0.0130, 1.60),
+    'Cruiser 1200':    makeFoil('Cruiser 1200',    1.15, 1200, 0.0110, 1.35),
+    'Mid Aspect 1000': makeFoil('Mid Aspect 1000', 1.05, 1000, 0.0100, 1.50),
+    'Downwind 900':    makeFoil('Downwind 900',    1.10,  900, 0.0090, 1.20),
+    'High Aspect 800': makeFoil('High Aspect 800', 1.05,  800, 0.0080, 1.10),
+    'Race 700':        makeFoil('Race 700',        1.00,  700, 0.0075, 1.00),
+    'Ultra HA 600':    makeFoil('Ultra HA 600',    0.98,  600, 0.0070, 0.85),
 };
 
-let activeFoil: FoilConfig = { ...FOIL_PRESETS['High Aspect Race'] };
+let activeFoil: FoilConfig = { ...FOIL_PRESETS['Downwind 900'] };
 
 // --- RACE CONFIGURATION ---
 let RACE_LENGTH_KM = 1; // total race distance — changed via intro HUD picker
@@ -107,8 +109,9 @@ function downwindDist(): number {
 const GRAVITY = 9.81;
 // Seawater density (kg/m³) — multiplier in all lift and drag force calculations
 const RHO_WATER = 1025;
-// Rider + gear mass (kg) — heavier means slower acceleration but harder to destabilize
-const RIDER_MASS = 80;
+// Rider + gear mass (kg). Heavier needs more speed to fly and more foot
+// pressure to hold altitude, so it is a real difficulty dial.
+let riderMass = 85;
 // Foil mast length (m) — caps maximum ride height above the water surface
 const MAST_LENGTH = 0.8;
 // Mast frontal area for drag (m²) — higher = more speed bleed from the submerged mast
@@ -130,9 +133,13 @@ const MAX_PITCH = Math.PI / 36;
 // cruising speed: the foil flies where lift from this AoA equals rider weight.
 const ALPHA_NEUTRAL = 2.4 * Math.PI / 180;
 // AoA authority from full front-to-back foot pressure (deg either side).
-const ALPHA_RANGE = 5.0 * Math.PI / 180;
+// To fly parallel to a sloping surface the rider must change flight path angle
+// by roughly the surface slope, which needs a comparable change in angle of
+// attack. Wave faces here reach 12-13 degrees, so 5 degrees left the rider
+// unable to follow a face at all — they simply sank through it.
+const ALPHA_RANGE = 9.0 * Math.PI / 180;
 // Stall angle — beyond this CL collapses and you fall off foil.
-const ALPHA_STALL = 12.0 * Math.PI / 180;
+const ALPHA_STALL = 15.0 * Math.PI / 180;
 // Wing depth (m) below which the foil starts ventilating and loses lift.
 // This is the breach mechanic: fly too high and the wing sucks air.
 const VENT_DEPTH = 0.30;
@@ -146,10 +153,49 @@ const ROLL_SPRING = 6.0;
 const ROLL_DAMPING = 3.0;
 // Wave-induced roll strength — higher = more wobble from uneven wave surface across the wing
 const WAVE_TORQUE_GAIN = 2.0;
-// Wave slope energy multiplier — higher = more speed gained from riding down wave faces
-const WAVE_ENERGY_MULT = 1.8;
+// Wave thrust multiplier. The term below is physically derived, so 1.0 is the
+// honest value; this only exists to exaggerate or damp it for feel.
+const WAVE_ENERGY_MULT = 1.0;
 // Sideways slip decay rate — higher = tighter tracking along heading, less drift in turns
 const LATERAL_RESISTANCE = 1.0;
+// Air density (kg/m^3) for the aerodynamic force on rider and board
+const RHO_AIR = 1.225;
+// Drag area (CD * frontal area, m^2) of a standing rider plus board
+const RIDER_DRAG_AREA = 0.62;
+
+// True wind. A foiler feels APPARENT wind — true wind minus their own velocity
+// — so running downwind at close to wind speed the push nearly vanishes, and
+// outrunning the wind turns it into a headwind. Modelled that way rather than
+// as a constant shove.
+const WIND = {
+    enabled: true,
+    speed: 12,      // m/s true wind
+    direction: 0,   // degrees, direction the wind blows TOWARD (0 = +Z downwind)
+    force: 1.0,     // multiplier, for exaggerating the effect
+};
+
+/**
+ * Speed at which the foil flies level at neutral foot pressure — the natural
+ * cruise for this wing and this rider. Solving L = m*g at the trim angle:
+ *   V = sqrt( 2*m*g / (rho * A * CL_alpha * alpha_trim) )
+ */
+function trimSpeedFor(foil: FoilConfig, mass: number): number {
+    const clAlpha = (2 * Math.PI * foil.aspectRatio) / (foil.aspectRatio + 2);
+    return Math.sqrt(
+        (2 * mass * GRAVITY) / (RHO_WATER * foil.wingArea * clAlpha * ALPHA_NEUTRAL)
+    );
+}
+
+/**
+ * Minimum flying speed: where the wing at stall angle can just carry the
+ * rider. Derived rather than configured, so it tracks both foil area and
+ * rider weight.
+ */
+function stallSpeedFor(foil: FoilConfig, mass: number): number {
+    const clAlpha = (2 * Math.PI * foil.aspectRatio) / (foil.aspectRatio + 2);
+    const clMax = clAlpha * ALPHA_STALL;
+    return Math.sqrt((2 * mass * GRAVITY) / (RHO_WATER * foil.wingArea * clMax));
+}
 
 // --- PHYSICS STATE ---
 const foilState = {
@@ -186,6 +232,12 @@ const foilState = {
     ventFactor: 1,
     /** Vertical water velocity at the wing, m/s. Positive = rising. */
     orbitalW: 0,
+    /** Forward thrust from the wave this frame, N. */
+    waveThrust: 0,
+    /** Apparent wind speed at the rider, m/s. */
+    apparentWind: 0,
+    /** Apparent wind bearing, radians (direction it blows toward). */
+    apparentWindDir: 0,
     /** Why the last crash happened, for the HUD message. */
     crashReason: '' as '' | 'breach' | 'touchdown' | 'stall',
 };
@@ -406,15 +458,34 @@ function resetFoilState() {
 }
 
 function launchFoil() {
-    const initialSpeed = activeFoil.stallSpeed * 1.5;
+    const initialSpeed = trimSpeedFor(activeFoil, riderMass) * 1.15;
     const dir = headingToDir(foilState.heading);
     foilState.velocity.copy(dir.multiplyScalar(initialSpeed));
-    foilState.rideHeight = 0.35;
-    foilState.vy = 0;
+    foilState.rideHeight = 0.45;
+    // Start in equilibrium with the surface the rider is about to fly over.
+    //
+    // What matters is not the water's local vertical velocity but the rate the
+    // surface changes UNDER A MOVING RIDER: d(eta)/dt + v . grad(eta). Matching
+    // only the orbital term still left the board sinking through steep faces,
+    // and launching at an unlucky wave phase killed the run instantly. Measure
+    // the following rate directly and match it.
+    {
+        const t0 = clock.elapsedTime;
+        const dt = 0.05;
+        const h0 = getSurfaceInfoAtWorldPos(
+            foilState.position.x, foilState.position.z, t0
+        ).position.y;
+        const h1 = getSurfaceInfoAtWorldPos(
+            foilState.position.x + foilState.velocity.x * dt,
+            foilState.position.z + foilState.velocity.z * dt,
+            t0 + dt
+        ).position.y;
+        foilState.vy = (h1 - h0) / dt;
+    }
     foilState.surfaceY = getSurfaceInfoAtWorldPos(
         foilState.position.x, foilState.position.z, clock.elapsedTime
     ).position.y;
-    foilState.worldY = foilState.surfaceY + 0.35;
+    foilState.worldY = foilState.surfaceY + 0.45;
     foilState.footPressure = 0;
     foilState.crashReason = '';
     foilState.onFoil = true;
@@ -440,21 +511,30 @@ type SwellSize = SwellPreset | 'custom';
 // rider means T ~ 5-7 s, which is 40-75 m between bumps. That is the band
 // people actually downwind in, so the primary swell lives there.
 const SWELL_SIZES: Record<SwellPreset, { height: number; period: number }>[] = [
-    {   // Primary — the bumps you ride. Medium reproduces the original game's
-        // dominant 40 m / 2.7 m-face wave, which is what made its bumps read.
-        small: { height: 2.4, period: 4.6 },
-        medium: { height: 3.8, period: 5.05 },
-        large: { height: 5.4, period: 5.6 },
+    {   // Primary — the bumps you ride.
+        //
+        // Height is limited by STEEPNESS, not by looks. To fly parallel to a
+        // wave face the rider must change flight-path angle by roughly the
+        // surface slope, and they only have so much angle of attack before the
+        // wing stalls. The original game ran Hs 4.15 m on a 40 m wavelength —
+        // 10.4% steepness, about double anything real — which demanded ~19
+        // degrees of AoA to follow. It got away with it because its ride height
+        // was a spring toward a target, not a flying wing. With real flight
+        // dynamics that sea cannot be ridden, so these stay near 4% steepness:
+        // still big faces, but on wavelengths long enough to fly.
+        small: { height: 1.6, period: 5.5 },
+        medium: { height: 2.6, period: 6.5 },
+        large: { height: 3.2, period: 8.0 },
     },
     {   // Secondary — groundswell you ride over, not on
-        small: { height: 0.7, period: 10.0 },
-        medium: { height: 1.2, period: 11.0 },
-        large: { height: 2.0, period: 13.0 },
+        small: { height: 0.8, period: 10.0 },
+        medium: { height: 1.2, period: 12.0 },
+        large: { height: 1.8, period: 14.0 },
     },
-    {   // Wind chop — the original's shorter 25/15/8 m components, combined
-        small: { height: 1.0, period: 3.2 },
-        medium: { height: 1.75, period: 3.6 },
-        large: { height: 2.6, period: 4.0 },
+    {   // Wind chop — texture underfoot
+        small: { height: 0.55, period: 3.0 },
+        medium: { height: 0.85, period: 3.6 },
+        large: { height: 1.00, period: 4.3 },
     },
 ];
 
@@ -2055,6 +2135,82 @@ function renderSwellPanel() {
     updateSwellReadouts();
 }
 
+// --- RIG & WIND CONTROLS ---
+const rigRowsEl = document.querySelector('#rig-rows') as HTMLElement;
+
+function buildRigPanel() {
+    rigRowsEl.innerHTML =
+        `<div class="rig-row">` +
+        `<div class="swell-dir" style="margin-top:0"><span>FOIL</span></div>` +
+        `<select data-role="foil">` +
+        Object.keys(FOIL_PRESETS).map(k =>
+            `<option value="${k}"${k === activeFoil.name ? ' selected' : ''}>${k}</option>`
+        ).join('') +
+        `</select>` +
+        `<div class="swell-meta" data-role="foilmeta"></div>` +
+        `</div>` +
+        `<div class="rig-row">` +
+        `<div class="swell-dir"><span>KG&nbsp;</span>` +
+        `<input type="range" data-role="mass" min="55" max="130" step="1" value="${riderMass}">` +
+        `<span data-role="massval">${riderMass}kg</span></div>` +
+        `</div>` +
+        `<div class="rig-row">` +
+        `<label class="swell-toggle">` +
+        `<input type="checkbox" data-role="windon"${WIND.enabled ? ' checked' : ''}>` +
+        `<span class="swell-swatch" style="background:#7dd3fc"></span><span>Wind</span></label>` +
+        `<div class="swell-dir"><span>KT&nbsp;</span>` +
+        `<input type="range" data-role="windspd" min="0" max="30" step="0.5" value="${(WIND.speed * 1.944).toFixed(1)}">` +
+        `<span data-role="windspdval"></span></div>` +
+        `<div class="swell-dir"><span>DIR</span>` +
+        `<input type="range" data-role="winddir" min="-90" max="90" step="1" value="${WIND.direction}">` +
+        `<span data-role="winddirval"></span></div>` +
+        `<div class="swell-meta" data-role="windmeta"></div>` +
+        `</div>`;
+
+    rigRowsEl.querySelector('[data-role="foil"]')!.addEventListener('change', (e) => {
+        const k = (e.target as HTMLSelectElement).value;
+        activeFoil = { ...FOIL_PRESETS[k] };
+        PARAMS.selectedFoil = k;
+        gui.controllersRecursive().forEach(c => c.updateDisplay());
+        renderRigPanel();
+    });
+    rigRowsEl.querySelector('[data-role="mass"]')!.addEventListener('input', (e) => {
+        riderMass = Number((e.target as HTMLInputElement).value);
+        renderRigPanel();
+    });
+    rigRowsEl.querySelector('[data-role="windon"]')!.addEventListener('change', (e) => {
+        WIND.enabled = (e.target as HTMLInputElement).checked;
+        renderRigPanel();
+    });
+    rigRowsEl.querySelector('[data-role="windspd"]')!.addEventListener('input', (e) => {
+        WIND.speed = Number((e.target as HTMLInputElement).value) / 1.944;
+        renderRigPanel();
+    });
+    rigRowsEl.querySelector('[data-role="winddir"]')!.addEventListener('input', (e) => {
+        WIND.direction = Number((e.target as HTMLInputElement).value);
+        renderRigPanel();
+    });
+    renderRigPanel();
+}
+
+function renderRigPanel() {
+    const f = activeFoil;
+    const stall = stallSpeedFor(f, riderMass);
+    rigRowsEl.querySelector('[data-role="foilmeta"]')!.textContent =
+        `${(f.wingArea * 10000).toFixed(0)} cm² · AR ${f.aspectRatio.toFixed(1)} · ` +
+        `span ${(f.wingSpan * 100).toFixed(0)} cm · min fly ${(stall * 1.944).toFixed(1)} kt`;
+    (rigRowsEl.querySelector('[data-role="mass"]') as HTMLInputElement).value = String(riderMass);
+    rigRowsEl.querySelector('[data-role="massval"]')!.textContent = `${riderMass}kg`;
+    rigRowsEl.querySelector('[data-role="windspdval"]')!.textContent =
+        `${(WIND.speed * 1.944).toFixed(0)}kt`;
+    rigRowsEl.querySelector('[data-role="winddirval"]')!.textContent = `${WIND.direction}°`;
+    rigRowsEl.querySelector('[data-role="windmeta"]')!.textContent = WIND.enabled
+        ? `pushes while slower than the wind, drags once you outrun it`
+        : 'off';
+}
+
+buildRigPanel();
+
 function setSwellPanelOpen(open: boolean) {
     swellPanelEl.classList.toggle('swell-panel--hidden', !open);
 }
@@ -3011,11 +3167,11 @@ function updatePhysics(dt: number, time: number) {
     foilState.wingDepth = wingDepth;
     foilState.ventFactor = ventFactor;
     foilState.orbitalW = orbitalW;
-    foilState.loadFactor = liftMag / (RIDER_MASS * GRAVITY);
+    foilState.loadFactor = liftMag / (riderMass * GRAVITY);
 
     // Foot pressure that would exactly hold altitude at this speed — the marker
     // the player chases on the trim gauge.
-    const clNeeded = (RIDER_MASS * GRAVITY) /
+    const clNeeded = (riderMass * GRAVITY) /
         Math.max(0.5 * RHO_WATER * speed * speed * foil.wingArea * Math.max(ventFactor, 0.05), 1e-3);
     const alphaNeeded = clNeeded / clAlpha;
     foilState.footPressureTrim = THREE.MathUtils.clamp(
@@ -3037,9 +3193,43 @@ function updatePhysics(dt: number, time: number) {
     // --- Accumulate horizontal forces ---
     const force = new THREE.Vector3(0, 0, 0);
 
-    // Wave energy: gravitational acceleration along wave slope
-    force.x += RIDER_MASS * GRAVITY * (-wave.gradient.x) * WAVE_ENERGY_MULT;
-    force.z += RIDER_MASS * GRAVITY * (-wave.gradient.y) * WAVE_ENERGY_MULT;
+    // Wave propulsion: the lift vector tilting forward in rising water.
+    //
+    // A foiler is not a sled on the surface — they are flying, connected to the
+    // water only through a wing half a metre down. Gravity along the surface
+    // slope does not act on them. What does act is that lift is perpendicular
+    // to the LOCAL FLOW, so where orbital motion carries water upward past the
+    // wing, the lift vector tilts forward and its forward component is thrust.
+    // Same mechanism as a glider working ridge lift.
+    //
+    // This also gives the speed limit the old model lacked. Thrust scales with
+    // the flow tilt w/V, so it falls away as you accelerate, while drag climbs
+    // with V^2. The two cross at a natural terminal speed instead of letting
+    // pump-spam run away.
+    const flowTilt = Math.atan2(orbitalW - foilState.vy, vRef);
+    const thrustMag = liftMag * Math.sin(flowTilt) * WAVE_ENERGY_MULT;
+    if (speed > 0.5) {
+        force.addScaledVector(foilState.velocity.clone().normalize(), thrustMag);
+    } else {
+        force.addScaledVector(headingToDir(foilState.heading), thrustMag);
+    }
+    foilState.waveThrust = thrustMag;
+
+    // Apparent wind on rider and board
+    if (WIND.enabled && WIND.speed > 0.01) {
+        const wd = THREE.MathUtils.degToRad(WIND.direction);
+        const relX = Math.sin(wd) * WIND.speed - foilState.velocity.x;
+        const relZ = Math.cos(wd) * WIND.speed - foilState.velocity.z;
+        const relSpeed = Math.hypot(relX, relZ);
+        const q = 0.5 * RHO_AIR * RIDER_DRAG_AREA * relSpeed * WIND.force;
+        force.x += q * relX;
+        force.z += q * relZ;
+        foilState.apparentWind = relSpeed;
+        foilState.apparentWindDir = Math.atan2(relX, relZ);
+    } else {
+        foilState.apparentWind = 0;
+        foilState.apparentWindDir = 0;
+    }
 
     // Drag opposing velocity
     if (speed > 0.01) {
@@ -3050,7 +3240,7 @@ function updatePhysics(dt: number, time: number) {
     // --- Turning from roll ---
     if (Math.abs(foilState.roll) > 0.01 && speed > 1.0) {
         const centripetal = liftMag * Math.sin(foilState.roll);
-        let headingRate = centripetal / (RIDER_MASS * Math.max(speed, 2.0));
+        let headingRate = centripetal / (riderMass * Math.max(speed, 2.0));
         headingRate = THREE.MathUtils.clamp(headingRate, -foil.turnRateMax, foil.turnRateMax);
         foilState.heading += headingRate * dt;
     }
@@ -3058,7 +3248,12 @@ function updatePhysics(dt: number, time: number) {
     // --- Pump ---
     if (input.pump && foilState.energy >= PUMP_COST && (time - foilState.lastPumpTime) > PUMP_COOLDOWN) {
         const pumpDir = headingToDir(foilState.heading);
-        foilState.velocity.addScaledVector(pumpDir, PUMP_IMPULSE);
+        // A pump works by the same mechanism as the wave: oscillating the foil
+        // throws extra flow past the wing and tilts lift forward. That tilt is
+        // w/V, so it fades as you speed up. A flat impulse let riders pump
+        // their way to 38 kt, which no amount of pumping achieves in reality.
+        const pumpGain = Math.min(1, trimSpeedFor(foil, riderMass) / Math.max(speed, 0.5));
+        foilState.velocity.addScaledVector(pumpDir, PUMP_IMPULSE * pumpGain);
         foilState.energy -= PUMP_COST;
         foilState.lastPumpTime = time;
         foilState.vy += 0.35;
@@ -3071,7 +3266,7 @@ function updatePhysics(dt: number, time: number) {
     foilState.energy = Math.min(100, foilState.energy + ENERGY_REGEN * dt);
 
     // --- Integrate velocity ---
-    const accel = force.clone().divideScalar(RIDER_MASS);
+    const accel = force.clone().divideScalar(riderMass);
     foilState.velocity.addScaledVector(accel, dt);
     foilState.velocity.y = 0;
 
@@ -3093,7 +3288,7 @@ function updatePhysics(dt: number, time: number) {
     // through the surface every time a wave lifts under it.
     const verticalLift = liftMag * Math.cos(foilState.roll);
     const heaveAccel =
-        (verticalLift - RIDER_MASS * GRAVITY) / RIDER_MASS
+        (verticalLift - riderMass * GRAVITY) / riderMass
         - foilState.vy * HEAVE_DAMPING;
 
     foilState.vy += heaveAccel * dt;
@@ -3119,7 +3314,7 @@ function updatePhysics(dt: number, time: number) {
     // --- Check crash ---
     if (foilState.rideHeight <= 0.001) {
         // Board has hit the water.
-        crashFoil(foilState.speed < foil.stallSpeed * 0.8 ? 'stall' : 'touchdown');
+        crashFoil(foilState.speed < stallSpeedFor(foil, riderMass) * 0.9 ? 'stall' : 'touchdown');
     } else if (wingDepth < 0.04 && foilState.vy - foilState.orbitalW > 0.2) {
         // Wing has come out of the water while still climbing — a breach.
         crashFoil('breach');

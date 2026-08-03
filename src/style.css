@@ -898,3 +898,32 @@ canvas {
   color: rgba(255, 255, 255, 0.5);
   min-height: 26px;
 }
+
+.swell-subhead {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.35);
+  margin: 10px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rig-row {
+  padding: 5px 0;
+}
+
+.rig-row select {
+  width: 100%;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 4px 5px;
+  cursor: pointer;
+}
+
+.rig-row select option {
+  background: #0b1c2c;
+}
