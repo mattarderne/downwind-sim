@@ -247,3 +247,58 @@ the line you have to ride.
 lost per crest). Once angling is properly rewarded that penalty is the stick and
 the sync line is the carrot, but it likely wants softening so a mistake costs a
 bump rather than the run.
+
+
+---
+
+# Round 3 — corrections and the turn
+
+## 11. Correction: the energy exchange was never over-unity
+
+Section 2 claimed the height-to-speed exchange returned 139% of the available
+energy. That was a measurement error, not a bug. Tracking total mechanical
+energy through a descent:
+
+```
+KE + PE:  5731 J  ->  5262 J     (-469 J)
+```
+
+Energy falls monotonically, as drag requires. The apparent surplus came from
+comparing a descending run against a run *holding* altitude, and holding costs
+more induced drag — 1.80 deg AoA against 1.43 deg. Two effects, one comparison.
+No fix needed.
+
+## 12. The turn was destroying momentum, not scrubbing it
+
+A held turn bled 21.4 kt to 6.1 kt in 3.7 s and stalled. Height held fine
+throughout (load ~1.15), so it was not a lift coordination failure. It was a
+death spiral: speed falls, AoA must rise to hold lift, induced drag rises with
+CL squared, speed falls faster.
+
+The energy was going somewhere unaccounted. The turn rotated `heading` but never
+applied any force to `velocity` — the velocity only caught up through the
+LATERAL_RESISTANCE damper, which deletes the sideways component. Deleting
+momentum destroys kinetic energy, every frame of every turn.
+
+A centripetal force is perpendicular to travel and does no work. Applying it to
+the velocity, at the same rate the heading rotates, keeps course and heading
+together so no sideslip is manufactured for the damper to eat.
+
+| | before | after |
+|---|---|---|
+| full-bank turn | crashed at 3.5 s, 139 deg | 7.3 s, 329 deg |
+| half-bank turn | — | survives 8 s, 153 deg, 8.4 kt |
+
+Turning still costs speed, roughly 12 kt over 7 s against holding a straight
+line, but that is now the induced drag of carrying extra load in a bank, which
+is the honest cost.
+
+## 13. State of the five priorities
+
+1. Mast drag proportional to submerged length — **done**, 46% spread
+2. Nerf pumping — **done**, decays to touchdown in 28.5 s on flat water
+3. Energy-conserving height/speed exchange — **was never broken**
+4. Forgiving heave, expensive turning — turn cost is now honest; heave is still
+   unforgiving (hands-off under a second) and remains open
+5. Coordinated turn model — **done** for the energy bug; sideslip modelling and
+   speed-dependent turn rates remain open

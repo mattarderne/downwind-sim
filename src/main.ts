@@ -3261,11 +3261,31 @@ function updatePhysics(dt: number, time: number) {
     }
 
     // --- Turning from roll ---
+    // Banking tilts the lift vector; its horizontal component is the centripetal
+    // force that curves the path.
+    //
+    // Crucially that force is applied to the VELOCITY, not just to the heading.
+    // Previously only `heading` was rotated and the velocity was dragged around
+    // afterwards by the LATERAL_RESISTANCE damper — which deletes the sideways
+    // component, and deleting momentum destroys kinetic energy. Every frame of
+    // a turn quietly threw away speed, which is why a held turn bled 21 kt down
+    // to 6 kt in under four seconds and stalled. A centripetal force is
+    // perpendicular to travel and does no work, so turning now costs only the
+    // induced drag of the extra load, which is the real cost.
     if (Math.abs(foilState.roll) > 0.01 && speed > 1.0) {
         const centripetal = liftMag * Math.sin(foilState.roll);
         let headingRate = centripetal / (riderMass * Math.max(speed, 2.0));
         headingRate = THREE.MathUtils.clamp(headingRate, -foil.turnRateMax, foil.turnRateMax);
         foilState.heading += headingRate * dt;
+
+        // Same rate applied to the velocity, so course and heading stay together
+        // and no sideslip is manufactured for the damper to eat.
+        const inv = 1 / Math.max(Math.hypot(foilState.velocity.x, foilState.velocity.z), 1e-3);
+        const perpX = foilState.velocity.z * inv;
+        const perpZ = -foilState.velocity.x * inv;
+        const turnForce = headingRate * riderMass * speed;
+        force.x += turnForce * perpX;
+        force.z += turnForce * perpZ;
     }
 
     // --- Pump ---
