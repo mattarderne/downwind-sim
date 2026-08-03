@@ -1561,7 +1561,7 @@ function updateHUD() {
         if (isMobile) {
             hudControls.textContent = 'Tap to launch · Drag to steer & trim';
         } else {
-            hudControls.textContent = '← → Turn  ·  ↑ nose down  ↓ nose up  ·  SPACE Pump\n\n    Press SPACE to launch';
+            hudControls.textContent = '← → Turn  ·  ↑ climb  ↓ sink  ·  SPACE Pump\n\n    Press SPACE to launch';
         }
         hudLeaderboard.innerHTML = cachedTop3HTML;
         hudLeaderboard.style.display = cachedTop3HTML ? '' : 'none';
@@ -3112,19 +3112,21 @@ function updatePhysics(dt: number, time: number) {
         if (input.right) targetRoll = -MAX_ROLL;
     }
 
-    // Fore/aft weight shift, mapped like a flight stick:
+    // Fore/aft weight shift. This mapping matches the ORIGINAL game exactly and
+    // must not be changed — only how it is drawn:
     //
-    //   up arrow / push forward  ->  FRONT foot  ->  nose down  ->  sink, accelerate
-    //   down arrow / pull back   ->  BACK  foot  ->  nose up    ->  climb
+    //   up arrow   -> back foot  -> more angle of attack -> CLIMB
+    //   down arrow -> front foot -> less angle of attack -> SINK
     //
-    // footPressure keeps its physical sign throughout: +1 is back foot, which
-    // adds angle of attack, -1 is front foot, which takes it away.
+    // The original's own 3D board tipped its nose DOWN while climbing, which
+    // reads as an inverted control. That is a fault in the drawing, not the
+    // control, and is corrected in updateBoardVisuals rather than here.
     let targetFoot = 0;
     if (input.pitchY !== 0) {
-        targetFoot = input.pitchY;
+        targetFoot = -input.pitchY;
     } else {
-        if (input.up) targetFoot = -1;
-        if (input.down) targetFoot = 1;
+        if (input.up) targetFoot = 1;
+        if (input.down) targetFoot = -1;
     }
     foilState.footPressure +=
         (targetFoot - foilState.footPressure) * Math.min(1, FOOT_RESPONSE * dt);
@@ -3472,8 +3474,11 @@ function updateBoardVisuals(time: number) {
     const yawQ = new THREE.Quaternion().setFromAxisAngle(
         new THREE.Vector3(0, 1, 0), foilState.heading
     );
+    // Negated deliberately. Rotating by +pitch about +X points the nose DOWN,
+    // so the original board dipped its nose while the rider climbed. Same
+    // control, honest picture.
     const pitchQ = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(1, 0, 0), foilState.pitch
+        new THREE.Vector3(1, 0, 0), -foilState.pitch
     );
     const rollQ = new THREE.Quaternion().setFromAxisAngle(
         new THREE.Vector3(0, 0, 1), -foilState.roll
