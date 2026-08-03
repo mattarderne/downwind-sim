@@ -276,14 +276,21 @@ function setStoredPlayerName(name: string) {
     try { localStorage.setItem('downwind-player-name', name); } catch { /* ignore */ }
 }
 
+// The global leaderboard lives behind an API on the game's own host. Builds
+// served from anywhere else (a fork, a static preview) have no such endpoint,
+// so track availability and hide the score UI rather than showing a submit
+// button that can only fail.
+let leaderboardAvailable = true;
+
 async function fetchLeaderboard(km: number): Promise<LeaderboardEntry[]> {
     if (IS_LOCAL) return MOCK_LEADERBOARD;
     try {
         const res = await fetch(`${API_BASE}/scores?km=${km}`);
-        if (!res.ok) return [];
+        if (!res.ok) { leaderboardAvailable = false; return []; }
         const data = await res.json();
         return data.scores || [];
     } catch {
+        leaderboardAvailable = false;
         return [];
     }
 }
@@ -1391,15 +1398,18 @@ function showRaceResults() {
     html += `</div>`;
     html += `<div class="finish-avg">Avg / km &nbsp;<span class="finish-avg-time">${fmtTime(avgPerKm)}</span></div>`;
 
-    html += `<div id="finish-submit-section" class="finish-submit">` +
-        `<input type="text" id="finish-name-input" placeholder="Your name" maxlength="20" ` +
-        `value="${escapeHTML(getStoredPlayerName())}" />` +
-        `<button id="finish-submit-btn">Submit Score</button>` +
-        `</div>`;
-    html += `<div id="finish-submit-status"></div>`;
-
-    html += `<div id="finish-leaderboard-slot">` +
-        `<div class="finish-loading">Loading leaderboard…</div></div>`;
+    if (leaderboardAvailable) {
+        html += `<div id="finish-submit-section" class="finish-submit">` +
+            `<input type="text" id="finish-name-input" placeholder="Your name" maxlength="20" ` +
+            `value="${escapeHTML(getStoredPlayerName())}" />` +
+            `<button id="finish-submit-btn">Submit Score</button>` +
+            `</div>`;
+        html += `<div id="finish-submit-status"></div>`;
+        html += `<div id="finish-leaderboard-slot">` +
+            `<div class="finish-loading">Loading leaderboard…</div></div>`;
+    } else {
+        html += `<div class="finish-offline">Offline preview — scores are not ranked</div>`;
+    }
 
     html += `<div class="finish-hint">Press R to restart</div>`;
 
@@ -1407,10 +1417,11 @@ function showRaceResults() {
     finishOverlay.style.display = 'block';
     finishOverlay.style.pointerEvents = 'auto';
 
-    const nameInput = document.getElementById('finish-name-input') as HTMLInputElement;
-    const submitBtn = document.getElementById('finish-submit-btn') as HTMLButtonElement;
-    const statusEl = document.getElementById('finish-submit-status')!;
-    const lbSlot = document.getElementById('finish-leaderboard-slot')!;
+    const nameInput = document.getElementById('finish-name-input') as HTMLInputElement | null;
+    const submitBtn = document.getElementById('finish-submit-btn') as HTMLButtonElement | null;
+    const statusEl = document.getElementById('finish-submit-status');
+    const lbSlot = document.getElementById('finish-leaderboard-slot');
+    if (!nameInput || !submitBtn || !statusEl || !lbSlot) return;
 
     fetchLeaderboard(RACE_LENGTH_KM).then(scores => {
         lbSlot.innerHTML = renderLeaderboardHTML(scores);
