@@ -420,12 +420,37 @@ function launchFoil() {
 // forecast reads it — significant height, peak period, direction — and expanded
 // into a band of spectral components by buildWaveField(), so wave groups (sets)
 // emerge from the physics instead of being faked.
+type SwellSize = 'small' | 'medium' | 'large';
+
+// Size presets per swell system, as (significant height, peak period). Bigger
+// swell runs longer period too, the way a real sea state scales.
+const SWELL_SIZES: Record<SwellSize, { height: number; period: number }>[] = [
+    {   // Primary — the bumps you actually ride
+        small: { height: 1.2, period: 7.0 },
+        medium: { height: 2.0, period: 8.0 },
+        large: { height: 3.0, period: 9.0 },
+    },
+    {   // Secondary — longer-period groundswell crossing through
+        small: { height: 0.6, period: 11.0 },
+        medium: { height: 1.1, period: 13.0 },
+        large: { height: 1.9, period: 15.0 },
+    },
+    {   // Wind chop — texture underfoot
+        small: { height: 0.25, period: 2.8 },
+        medium: { height: 0.5, period: 3.2 },
+        large: { height: 0.95, period: 3.8 },
+    },
+];
+
+const swellSize: SwellSize[] = ['medium', 'medium', 'medium'];
+const SWELL_COLORS = ['#60a5fa', '#a78bfa', '#94a3b8'];
+
 const SWELLS: SwellSpec[] = [
     {
         name: 'Primary swell',
         enabled: true,
-        height: 1.2,        // Hs, m
-        period: 8.0,        // Tp, s  -> 100 m wavelength, 24 kt crests
+        height: SWELL_SIZES[0].medium.height,
+        period: SWELL_SIZES[0].medium.period,
         direction: 0,       // straight downwind (+Z)
         spread: 12,
         components: 12,
@@ -434,9 +459,9 @@ const SWELLS: SwellSpec[] = [
     {
         name: 'Secondary swell',
         enabled: true,
-        height: 0.6,
-        period: 13.0,       // long-period groundswell, 264 m, 39 kt crests
-        direction: 28,      // crossing from the left
+        height: SWELL_SIZES[1].medium.height,
+        period: SWELL_SIZES[1].medium.period,
+        direction: 30,      // crossing from the left
         spread: 14,
         components: 10,
         bandwidth: 0.05,
@@ -444,14 +469,16 @@ const SWELLS: SwellSpec[] = [
     {
         name: 'Wind chop',
         enabled: true,
-        height: 0.35,
-        period: 3.2,
+        height: SWELL_SIZES[2].medium.height,
+        period: SWELL_SIZES[2].medium.period,
         direction: 6,
         spread: 32,
         components: 10,
         bandwidth: 0.18,
     },
 ];
+
+const SWELL_DEFAULTS = SWELLS.map(s => ({ ...s }));
 
 let waveField: WaveField = buildWaveField(SWELLS);
 
@@ -1537,6 +1564,114 @@ for (let i = 0; i < SWELLS.length; i++) {
 }
 updateSwellReadouts();
 
+
+// --- SEA STATE CONFIG PANEL ---
+// Plain HTML rather than lil-gui: it has to work on a phone, which is where
+// most people hit this, and small/medium/large is a faster decision than
+// typing a significant wave height.
+
+const swellPanelEl = document.querySelector('#swell-panel') as HTMLElement;
+const swellRowsEl = document.querySelector('#swell-rows') as HTMLElement;
+const swellSummaryEl = document.querySelector('#swell-summary') as HTMLElement;
+const swellBtnEl = document.querySelector('#swell-btn') as HTMLButtonElement;
+
+function applySwellSize(i: number, size: SwellSize) {
+    swellSize[i] = size;
+    SWELLS[i].height = SWELL_SIZES[i][size].height;
+    SWELLS[i].period = SWELL_SIZES[i][size].period;
+    rebuildWaveField();
+    renderSwellPanel();
+}
+
+function buildSwellPanel() {
+    swellRowsEl.innerHTML = '';
+    for (let i = 0; i < SWELLS.length; i++) {
+        const s = SWELLS[i];
+        const row = document.createElement('div');
+        row.className = 'swell-row';
+        row.dataset.index = String(i);
+        row.innerHTML =
+            `<label class="swell-toggle">` +
+            `<input type="checkbox" data-role="enable"${s.enabled ? ' checked' : ''}>` +
+            `<span class="swell-swatch" style="background:${SWELL_COLORS[i]}"></span>` +
+            `<span>${s.name}</span></label>` +
+            `<div class="swell-sizes">` +
+            (['small', 'medium', 'large'] as SwellSize[]).map(sz =>
+                `<button data-size="${sz}">${sz[0].toUpperCase() + sz.slice(1)}</button>`
+            ).join('') +
+            `</div>` +
+            `<div class="swell-dir"><span>DIR</span>` +
+            `<input type="range" data-role="dir" min="-90" max="90" step="1" value="${s.direction}">` +
+            `<span data-role="dirval">${s.direction}°</span></div>` +
+            `<div class="swell-meta" data-role="meta"></div>`;
+
+        row.querySelector('[data-role="enable"]')!.addEventListener('change', (e) => {
+            SWELLS[i].enabled = (e.target as HTMLInputElement).checked;
+            rebuildWaveField();
+            renderSwellPanel();
+        });
+        row.querySelectorAll<HTMLButtonElement>('.swell-sizes button').forEach(b => {
+            b.addEventListener('click', () => applySwellSize(i, b.dataset.size as SwellSize));
+        });
+        row.querySelector('[data-role="dir"]')!.addEventListener('input', (e) => {
+            SWELLS[i].direction = Number((e.target as HTMLInputElement).value);
+            rebuildWaveField();
+            renderSwellPanel();
+        });
+
+        swellRowsEl.appendChild(row);
+    }
+    renderSwellPanel();
+}
+
+function renderSwellPanel() {
+    const rows = swellRowsEl.querySelectorAll<HTMLElement>('.swell-row');
+    rows.forEach((row, i) => {
+        const s = SWELLS[i];
+        row.classList.toggle('swell-row--off', !s.enabled);
+        (row.querySelector('[data-role="enable"]') as HTMLInputElement).checked = s.enabled;
+
+        row.querySelectorAll<HTMLButtonElement>('.swell-sizes button').forEach(b => {
+            b.classList.toggle('swell-size--active', b.dataset.size === swellSize[i]);
+        });
+
+        (row.querySelector('[data-role="dir"]') as HTMLInputElement).value = String(s.direction);
+        row.querySelector('[data-role="dirval"]')!.textContent = `${s.direction}°`;
+
+        const lambda = periodToWavelength(s.period);
+        const c = periodToPhaseSpeed(s.period);
+        row.querySelector('[data-role="meta"]')!.textContent =
+            `${s.height.toFixed(1)} m @ ${s.period.toFixed(0)} s · λ ${lambda.toFixed(0)} m · ` +
+            `crest ${(c * 1.944).toFixed(0)} kt · set ${(c / 2 * 1.944).toFixed(0)} kt`;
+    });
+
+    // Combined sea state: variances add, so Hs adds in quadrature.
+    let sumSq = 0;
+    for (const s of SWELLS) if (s.enabled) sumSq += s.height * s.height;
+    swellSummaryEl.textContent = `Combined Hs ${Math.sqrt(sumSq).toFixed(1)} m`;
+
+    updateSwellReadouts();
+}
+
+function setSwellPanelOpen(open: boolean) {
+    swellPanelEl.classList.toggle('swell-panel--hidden', !open);
+}
+
+swellBtnEl.addEventListener('click', () =>
+    setSwellPanelOpen(swellPanelEl.classList.contains('swell-panel--hidden'))
+);
+document.querySelector('#swell-close')!.addEventListener('click', () => setSwellPanelOpen(false));
+document.querySelector('#swell-reset')!.addEventListener('click', () => {
+    for (let i = 0; i < SWELLS.length; i++) {
+        Object.assign(SWELLS[i], SWELL_DEFAULTS[i]);
+        swellSize[i] = 'medium';
+    }
+    rebuildWaveField();
+    renderSwellPanel();
+});
+
+buildSwellPanel();
+
 gui.addColor(PARAMS, 'waterColor').name('Water Color').onChange((c: string) => {
     waterMaterial.color.set(c);
 });
@@ -2112,10 +2247,19 @@ function setupInstCanvas(id: string, w: number, h: number): CanvasRenderingConte
     return ctx;
 }
 
-const INST_WAVETRAIN = { w: 300, h: 108 };
-const INST_SET = { w: 138, h: 112 };
-const INST_RADAR = { w: 118, h: 112 };
-const INST_TRIM = { w: 100, h: 112 };
+const INST_WAVETRAIN = { w: 320, h: 112 };
+const INST_SET = { w: 152, h: 112 };
+const INST_RADAR = { w: 160, h: 112 };
+const INST_TRIM = { w: 126, h: 172 };
+
+// How far the wave train looks ahead/behind. Cycled by clicking the panel:
+// ~1 set length by default so the group structure is visible.
+const WAVETRAIN_RANGES = [
+    { behind: 150, ahead: 350 },
+    { behind: 300, ahead: 700 },
+    { behind: 60, ahead: 140 },
+];
+let waveTrainRange = 0;
 
 const instWaveTrainCtx = setupInstCanvas('#inst-wavetrain', INST_WAVETRAIN.w, INST_WAVETRAIN.h);
 const instSetCtx = setupInstCanvas('#inst-set', INST_SET.w, INST_SET.h);
@@ -2123,15 +2267,23 @@ const instRadarCtx = setupInstCanvas('#inst-radar', INST_RADAR.w, INST_RADAR.h);
 const instTrimCtx = setupInstCanvas('#inst-trim', INST_TRIM.w, INST_TRIM.h);
 
 const instrumentsEl = document.querySelector('#instruments') as HTMLElement;
+const trimDockEl = document.querySelector('#trim-dock') as HTMLElement;
 const instToggleEl = document.querySelector('#inst-toggle') as HTMLButtonElement;
 
 let instrumentsVisible = true;
 function setInstrumentsVisible(v: boolean) {
     instrumentsVisible = v;
     instrumentsEl.classList.toggle('instruments--hidden', !v);
+    trimDockEl.classList.toggle('instruments--hidden', !v);
     instToggleEl.style.opacity = v ? '1' : '0.5';
 }
 instToggleEl.addEventListener('click', () => setInstrumentsVisible(!instrumentsVisible));
+
+// Click the wave train to cycle how far it looks up and down the track.
+(document.querySelector('#inst-wavetrain') as HTMLCanvasElement)
+    .addEventListener('click', () => {
+        waveTrainRange = (waveTrainRange + 1) % WAVETRAIN_RANGES.length;
+    });
 
 const _riderReadout: RiderReadout = {
     x: 0, z: 0, heading: 0, track: 0, speed: 0, rideHeight: 0,
@@ -2165,8 +2317,9 @@ function drawInstruments(time: number) {
     const dom = dominantSwell(waveField, r.x, r.z, time);
     const si = dom.index >= 0 ? dom.index : 0;
 
+    const range = WAVETRAIN_RANGES[waveTrainRange];
     drawWaveTrain(instWaveTrainCtx, INST_WAVETRAIN.w, INST_WAVETRAIN.h,
-        waveField, r, time, { behind: 120, ahead: 220, swellIndex: si });
+        waveField, r, time, { ...range, swellIndex: si });
     drawSetMeter(instSetCtx, INST_SET.w, INST_SET.h, waveField, r, time, si);
     drawSwellRadar(instRadarCtx, INST_RADAR.w, INST_RADAR.h, waveField,
         SWELLS.map(s => s.name), SWELLS.map(s => s.enabled), r);
@@ -2337,6 +2490,9 @@ window.addEventListener('keydown', (e) => {
             break;
         case 'KeyI':
             setInstrumentsVisible(!instrumentsVisible);
+            break;
+        case 'KeyS':
+            setSwellPanelOpen(swellPanelEl.classList.contains('swell-panel--hidden'));
             break;
         case 'KeyC':
             useChaseCamera = !useChaseCamera;

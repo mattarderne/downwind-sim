@@ -112,14 +112,32 @@
 
     <!-- Instrument cluster -->
     <div id="instruments">
-      <canvas id="inst-wavetrain"></canvas>
+      <canvas id="inst-wavetrain" title="Click to change range"></canvas>
       <div id="inst-row">
         <canvas id="inst-set"></canvas>
         <canvas id="inst-radar"></canvas>
-        <canvas id="inst-trim"></canvas>
       </div>
     </div>
     <button id="inst-toggle" title="Toggle instruments (I)">◧ INSTRUMENTS</button>
+
+    <!-- Trim + height, parked beside the rider so it stays in view while riding -->
+    <div id="trim-dock">
+      <canvas id="inst-trim"></canvas>
+    </div>
+
+    <!-- Sea state config -->
+    <button id="swell-btn" title="Sea state (S)">≋ SWELL</button>
+    <div id="swell-panel" class="swell-panel--hidden">
+      <div class="swell-panel-head">
+        <span>SEA STATE</span>
+        <button id="swell-close" aria-label="Close">✕</button>
+      </div>
+      <div id="swell-rows"></div>
+      <div class="swell-panel-foot">
+        <span id="swell-summary"></span>
+        <button id="swell-reset">Reset</button>
+      </div>
+    </div>
 
     <!-- Finish results overlay -->
     <div id="finish-overlay"></div>

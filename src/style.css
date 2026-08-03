@@ -556,6 +556,11 @@ canvas {
   border-radius: 10px;
 }
 
+#inst-wavetrain {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 #instruments.instruments--hidden {
   display: none;
 }
@@ -579,6 +584,206 @@ canvas {
 #inst-toggle:hover {
   color: #fff;
   background: rgba(0, 30, 60, 0.85);
+}
+
+/* Trim + height card, parked beside the rider rather than off in the corner
+   so it can be read without looking away from the board. */
+#trim-dock {
+  position: fixed;
+  left: max(12px, calc(50% - 350px));
+  top: 50%;
+  transform: translateY(-30%);
+  z-index: 100;
+  pointer-events: none;
+}
+
+#trim-dock canvas {
+  display: block;
+  border-radius: 10px;
+}
+
+#trim-dock.instruments--hidden {
+  display: none;
+}
+
+/* ---------- sea state config ---------- */
+#swell-btn {
+  position: fixed;
+  right: 16px;
+  top: 34px;
+  z-index: 101;
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(0, 18, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+#swell-btn:hover {
+  color: #fff;
+  background: rgba(0, 30, 60, 0.85);
+}
+
+#swell-panel {
+  position: fixed;
+  right: 16px;
+  top: 60px;
+  z-index: 160;
+  width: 264px;
+  font-family: monospace;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 18, 36, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+}
+
+#swell-panel.swell-panel--hidden {
+  display: none;
+}
+
+.swell-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 8px;
+}
+
+.swell-panel-head button {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.swell-panel-head button:hover {
+  color: #fff;
+}
+
+.swell-row {
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.swell-row:first-child {
+  border-top: none;
+}
+
+.swell-row--off .swell-sizes,
+.swell-row--off .swell-meta,
+.swell-row--off .swell-dir {
+  opacity: 0.3;
+}
+
+.swell-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.swell-toggle input {
+  accent-color: #3c8cff;
+  cursor: pointer;
+  margin: 0;
+}
+
+.swell-toggle .swell-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.swell-sizes {
+  display: flex;
+  gap: 4px;
+}
+
+.swell-sizes button {
+  flex: 1;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.swell-sizes button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.swell-sizes button.swell-size--active {
+  color: #0b1c2c;
+  background: #4fc3f7;
+  border-color: #4fc3f7;
+  font-weight: bold;
+}
+
+.swell-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.swell-dir input {
+  flex: 1;
+  accent-color: #3c8cff;
+  cursor: pointer;
+  height: 2px;
+}
+
+.swell-meta {
+  font-size: 9px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 5px;
+}
+
+.swell-panel-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.swell-panel-foot button {
+  font-family: monospace;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.swell-panel-foot button:hover {
+  color: #fff;
 }
 
 /* lil-gui derived-value readout under each swell folder */
@@ -606,6 +811,21 @@ canvas {
   #inst-toggle {
     right: 8px;
     top: 40px;
+  }
+  #swell-btn {
+    right: 8px;
+    top: 14px;
+  }
+  #swell-panel {
+    right: 8px;
+    top: 40px;
+    width: min(264px, calc(100vw - 16px));
+  }
+  #trim-dock {
+    left: 8px;
+    top: 46%;
+    transform: translateY(-30%) scale(0.85);
+    transform-origin: left center;
   }
 }
 
