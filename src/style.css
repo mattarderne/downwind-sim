@@ -839,3 +839,60 @@ canvas {
 .swell-dir span:first-child {
   min-width: 22px;
 }
+
+/* ---------- bump readability experiments ---------- */
+#viz-wrap {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 120;
+  font-family: monospace;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+#viz-bar {
+  display: flex;
+  gap: 3px;
+}
+
+#viz-bar button {
+  width: 22px;
+  height: 22px;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 18, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+#viz-bar button:hover {
+  color: #fff;
+  background: rgba(0, 30, 60, 0.9);
+}
+
+#viz-bar button.viz-btn--active {
+  color: #0b1c2c;
+  background: #4fc3f7;
+  border-color: #4fc3f7;
+  font-weight: bold;
+}
+
+#viz-note {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(0, 18, 36, 0.6);
+  padding: 3px 7px;
+  border-radius: 5px;
+  max-width: 300px;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  #viz-wrap { left: 8px; bottom: 8px; transform: scale(0.85); transform-origin: bottom left; }
+  #viz-note { max-width: 200px; }
+}

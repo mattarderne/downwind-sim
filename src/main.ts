@@ -440,21 +440,21 @@ type SwellSize = SwellPreset | 'custom';
 // rider means T ~ 5-7 s, which is 40-75 m between bumps. That is the band
 // people actually downwind in, so the primary swell lives there.
 const SWELL_SIZES: Record<SwellPreset, { height: number; period: number }>[] = [
-    {   // Primary — the bumps you actually ride. Kept in the catchable band.
-        small: { height: 1.0, period: 5.0 },   // 39 m, 15 kt crests
-        medium: { height: 1.8, period: 6.0 },  // 56 m, 18 kt crests
-        large: { height: 2.8, period: 7.0 },   // 76 m, 21 kt crests
+    {   // Primary — the bumps you ride. Medium reproduces the original game's
+        // dominant 40 m / 2.7 m-face wave, which is what made its bumps read.
+        small: { height: 2.4, period: 4.6 },
+        medium: { height: 3.8, period: 5.05 },
+        large: { height: 5.4, period: 5.6 },
     },
-    {   // Secondary — groundswell you ride over, not on. It modulates the
-        // primary rather than being ridable itself.
-        small: { height: 0.9, period: 10.0 },
-        medium: { height: 1.6, period: 12.0 },
-        large: { height: 2.6, period: 14.0 },
+    {   // Secondary — groundswell you ride over, not on
+        small: { height: 0.7, period: 10.0 },
+        medium: { height: 1.2, period: 11.0 },
+        large: { height: 2.0, period: 13.0 },
     },
-    {   // Wind chop — texture underfoot
-        small: { height: 0.25, period: 2.8 },
-        medium: { height: 0.45, period: 3.2 },
-        large: { height: 0.8, period: 3.8 },
+    {   // Wind chop — the original's shorter 25/15/8 m components, combined
+        small: { height: 1.0, period: 3.2 },
+        medium: { height: 1.75, period: 3.6 },
+        large: { height: 2.6, period: 4.0 },
     },
 ];
 
@@ -477,8 +477,12 @@ const SWELLS: SwellSpec[] = [
         height: SWELL_SIZES[0].medium.height,
         period: SWELL_SIZES[0].medium.period,
         direction: 0,       // straight downwind (+Z)
-        spread: 12,
-        components: 12,
+        spread: 10,
+        // Deliberately few components. Spreading Hs over a broad spectrum is
+        // more realistic but leaves no single wave large enough to see or ride;
+        // concentrating it gives a dominant bump, like the original's discrete
+        // sines. Three still beat against each other, so sets still form.
+        components: 3,
         bandwidth: 0.05,
     },
     {
@@ -488,7 +492,7 @@ const SWELLS: SwellSpec[] = [
         period: SWELL_SIZES[1].medium.period,
         direction: 30,      // crossing from the left
         spread: 14,
-        components: 10,
+        components: 8,
         bandwidth: 0.05,
     },
     {
@@ -498,7 +502,7 @@ const SWELLS: SwellSpec[] = [
         period: SWELL_SIZES[2].medium.period,
         direction: 6,
         spread: 32,
-        components: 10,
+        components: 5,
         bandwidth: 0.18,
     },
 ];
@@ -880,6 +884,15 @@ const waterUniforms = {
     uWaveDirAmp: { value: waveDirAmpBuf },
     uWaveOmegaPhase: { value: waveOmegaPhaseBuf },
     uWaveCount: { value: 0 },
+    uVizSlope: { value: 0 },
+    uVizHeight: { value: 0 },
+    uVizContour: { value: 0 },
+    uVizFoam: { value: 0 },
+    uVizFace: { value: 0 },
+    uVizGrid: { value: 0 },
+    uRideDir: { value: new THREE.Vector2(0, 1) },
+    uWaveScale: { value: 2.0 },
+    uSunDir: { value: new THREE.Vector3(0, 1, 0) },
 };
 
 /** Push the current wave field into the GPU uniform buffers. */
@@ -943,6 +956,15 @@ waterMaterial.onBeforeCompile = (shader) => {
     shader.uniforms.uWaveDirAmp = waterUniforms.uWaveDirAmp;
     shader.uniforms.uWaveOmegaPhase = waterUniforms.uWaveOmegaPhase;
     shader.uniforms.uWaveCount = waterUniforms.uWaveCount;
+    shader.uniforms.uVizSlope = waterUniforms.uVizSlope;
+    shader.uniforms.uVizHeight = waterUniforms.uVizHeight;
+    shader.uniforms.uVizContour = waterUniforms.uVizContour;
+    shader.uniforms.uVizFoam = waterUniforms.uVizFoam;
+    shader.uniforms.uVizFace = waterUniforms.uVizFace;
+    shader.uniforms.uVizGrid = waterUniforms.uVizGrid;
+    shader.uniforms.uRideDir = waterUniforms.uRideDir;
+    shader.uniforms.uWaveScale = waterUniforms.uWaveScale;
+    shader.uniforms.uSunDir = waterUniforms.uSunDir;
 
     shader.vertexShader = `
         #define MAX_WAVE_COMPONENTS ${MAX_COMPONENTS}
@@ -956,6 +978,8 @@ waterMaterial.onBeforeCompile = (shader) => {
         varying vec3 vGridPos;
         varying vec3 vViewTangent;
         varying vec3 vViewBinormal;
+        varying vec3 vWorldPos;
+        varying vec3 vWaveNormal;
     ` + shader.vertexShader;
 
     shader.vertexShader = shader.vertexShader.replace(
@@ -1007,6 +1031,8 @@ waterMaterial.onBeforeCompile = (shader) => {
         vGridPos = gridPoint; // world-space for ripple UVs
         vViewTangent = normalize(normalMatrix * waveTangent);
         vViewBinormal = normalize(normalMatrix * waveBinormal);
+        vWorldPos = p;                 // displaced, world space
+        vWaveNormal = objectNormal;    // mesh is unrotated, so this is world space
         `
     );
 
@@ -1023,10 +1049,85 @@ waterMaterial.onBeforeCompile = (shader) => {
         uniform sampler2D uNoiseTexture;
         uniform float uNoisePeriod;
 
+        uniform float uVizSlope;
+        uniform float uVizHeight;
+        uniform float uVizContour;
+        uniform float uVizFoam;
+        uniform float uVizFace;
+        uniform float uVizGrid;
+        uniform vec2  uRideDir;
+        uniform float uWaveScale;
+        uniform vec3  uSunDir;
+
         varying vec3 vGridPos;
         varying vec3 vViewTangent;
         varying vec3 vViewBinormal;
+        varying vec3 vWorldPos;
+        varying vec3 vWaveNormal;
     ` + shader.fragmentShader;
+
+    // Readability overlays, applied to the final colour so they sit on top of
+    // the standard lighting rather than fighting it.
+    shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `
+        #include <dithering_fragment>
+        {
+            vec3 wn = normalize(vWaveNormal);
+            float ny = max(wn.y, 0.001);
+            vec2 slope = vec2(-wn.x / ny, -wn.z / ny);
+            float steep = length(slope);
+            float hgt = vWorldPos.y;
+
+            // Exaggerated directional shading — the main cue a mirror surface lacks
+            if (uVizSlope > 0.0) {
+                float lam = clamp(dot(wn, normalize(uSunDir)), 0.0, 1.0);
+                gl_FragColor.rgb *= mix(1.0, 0.35 + 1.25 * lam, uVizSlope);
+            }
+
+            // Height ramp: crests light, troughs dark
+            if (uVizHeight > 0.0) {
+                float t = clamp(hgt / max(uWaveScale, 0.1) * 0.5 + 0.5, 0.0, 1.0);
+                vec3 ramp = mix(vec3(0.01, 0.09, 0.22), vec3(0.62, 0.88, 1.0), t);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, ramp, uVizHeight);
+            }
+
+            // Iso-height contours, like a topo map
+            if (uVizContour > 0.0) {
+                float spacing = max(uWaveScale * 0.22, 0.05);
+                float f = hgt / spacing;
+                float d = abs(fract(f - 0.5) - 0.5) / max(fwidth(f), 1e-4);
+                float line = 1.0 - clamp(d, 0.0, 1.0);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), line * uVizContour * 0.75);
+            }
+
+            // Whitecap the steep faces
+            if (uVizFoam > 0.0) {
+                float fo = smoothstep(0.09, 0.26, steep);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), fo * uVizFoam * 0.85);
+            }
+
+            // Rideable faces: green where the surface runs downhill along your
+            // heading, red where you would be climbing. This is the one that
+            // maps directly onto what you are trying to do.
+            if (uVizFace > 0.0) {
+                float fav = -dot(slope, normalize(uRideDir + vec2(1e-5)));
+                float g = smoothstep(0.015, 0.10, fav);
+                float r = smoothstep(0.015, 0.10, -fav);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.15, 1.0, 0.35), g * uVizFace * 0.55);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.25, 0.2), r * uVizFace * 0.30);
+            }
+
+            // World-space grid for parallax and scale
+            if (uVizGrid > 0.0) {
+                vec2 gr = vWorldPos.xz / 10.0;
+                vec2 gd = abs(fract(gr - 0.5) - 0.5) / max(fwidth(gr), vec2(1e-4));
+                float gline = 1.0 - clamp(min(gd.x, gd.y), 0.0, 1.0);
+                gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0), gline * uVizGrid * 0.4);
+            }
+        }
+        `
+    );
 
     const fwidth_shader = `
         #include <normal_fragment_begin>
@@ -1650,6 +1751,187 @@ for (let i = 0; i < SWELLS.length; i++) {
     f.close();
 }
 updateSwellReadouts();
+
+
+// --- LOOK: BUMP READABILITY EXPERIMENTS ---
+// The wave field is correct but hard to read, because the water is a near
+// mirror (roughness 0.05 / metalness 0.9) lit by an almost overhead sun and a
+// dominant uniform hemisphere light. A mirror under uniform light reflects
+// nearly the same colour whichever way it tilts, so the surface has shape but
+// shows none of it. Each mode below attacks that differently — cycle and pick.
+
+interface VizPreset {
+    name: string;
+    note: string;
+    sunElevation?: number;
+    sunAzimuth?: number;
+    roughness?: number;
+    metalness?: number;
+    hemi?: number;
+    dir?: number;
+    ambient?: number;
+    slope?: number;
+    height?: number;
+    contour?: number;
+    foam?: number;
+    face?: number;
+    grid?: number;
+}
+
+const VIZ_STOCK: VizPreset = {
+    name: 'Stock',
+    note: 'as shipped — mirror water, overhead sun',
+    sunElevation: 85, sunAzimuth: 180, roughness: 0.05, metalness: 0.9,
+    hemi: 20, dir: 0.5, ambient: 0.05,
+};
+
+const VIZ_PRESETS: VizPreset[] = [
+    VIZ_STOCK,
+    {
+        name: 'Raking sun',
+        note: 'low sun across the swell — pure lighting, no overlay',
+        sunElevation: 11, sunAzimuth: 205, roughness: 0.22, metalness: 0.65,
+        hemi: 3.0, dir: 4.5, ambient: 0.12,
+    },
+    {
+        name: 'Matte',
+        note: 'diffuse water so shading follows slope directly',
+        sunElevation: 28, sunAzimuth: 200, roughness: 0.8, metalness: 0.05,
+        hemi: 1.6, dir: 3.5, ambient: 0.15,
+    },
+    {
+        name: 'Slope shading',
+        note: 'exaggerated directional shading on top of stock',
+        sunElevation: 25, sunAzimuth: 200, roughness: 0.35, metalness: 0.5,
+        hemi: 4, dir: 2.0, slope: 1.0,
+    },
+    {
+        name: 'Height ramp',
+        note: 'crests light, troughs dark',
+        sunElevation: 40, roughness: 0.4, metalness: 0.3, hemi: 4, dir: 1.5,
+        height: 0.75,
+    },
+    {
+        name: 'Contours',
+        note: 'iso-height lines, like a topo map',
+        sunElevation: 40, roughness: 0.3, metalness: 0.5, hemi: 5, dir: 1.0,
+        contour: 1.0,
+    },
+    {
+        name: 'Crest foam',
+        note: 'whitecaps wherever the surface is steep',
+        sunElevation: 20, sunAzimuth: 200, roughness: 0.3, metalness: 0.5,
+        hemi: 4, dir: 2.5, foam: 1.0,
+    },
+    {
+        name: 'Rideable faces',
+        note: 'green = downhill along your heading, red = climbing',
+        sunElevation: 30, roughness: 0.35, metalness: 0.4, hemi: 4, dir: 1.5,
+        face: 1.0,
+    },
+    {
+        name: 'Faces + foam',
+        note: 'the gameplay cue plus crest definition',
+        sunElevation: 18, sunAzimuth: 200, roughness: 0.28, metalness: 0.5,
+        hemi: 3.5, dir: 3.0, face: 0.9, foam: 0.7,
+    },
+    {
+        name: 'X-ray',
+        note: 'dark water, contours + grid + slope shading',
+        sunElevation: 35, roughness: 0.5, metalness: 0.2, hemi: 1.2, dir: 1.0,
+        ambient: 0.05, contour: 0.9, grid: 0.7, slope: 0.8,
+    },
+    {
+        name: 'Everything',
+        note: 'all cues at once — ugly, but nothing is hidden',
+        sunElevation: 15, sunAzimuth: 205, roughness: 0.3, metalness: 0.4,
+        hemi: 2.5, dir: 3.5, slope: 0.7, height: 0.3, contour: 0.5,
+        foam: 0.6, face: 0.7, grid: 0.3,
+    },
+];
+
+let vizIndex = 0;
+const vizBarEl = document.querySelector('#viz-bar') as HTMLElement;
+const vizNoteEl = document.querySelector('#viz-note') as HTMLElement;
+
+function applyViz(preset: VizPreset) {
+    const p = { ...VIZ_STOCK, ...preset };
+    PARAMS.sunElevation = p.sunElevation!;
+    PARAMS.sunAzimuth = p.sunAzimuth!;
+    PARAMS.ambientIntensity = p.ambient ?? 0.05;
+    PARAMS.hemiIntensity = p.hemi ?? 20;
+    PARAMS.dirIntensity = p.dir ?? 0.5;
+
+    waterMaterial.roughness = p.roughness ?? 0.05;
+    waterMaterial.metalness = p.metalness ?? 0.9;
+    ambientLight.intensity = PARAMS.ambientIntensity;
+    hemiLight.intensity = PARAMS.hemiIntensity;
+    dirLight.intensity = PARAMS.dirIntensity;
+
+    waterUniforms.uVizSlope.value = preset.slope ?? 0;
+    waterUniforms.uVizHeight.value = preset.height ?? 0;
+    waterUniforms.uVizContour.value = preset.contour ?? 0;
+    waterUniforms.uVizFoam.value = preset.foam ?? 0;
+    waterUniforms.uVizFace.value = preset.face ?? 0;
+    waterUniforms.uVizGrid.value = preset.grid ?? 0;
+
+    updateEnvironment();
+    gui.controllersRecursive().forEach(c => c.updateDisplay());
+    renderVizBar();
+}
+
+/** Randomise the overlay weights — the "what if" button. */
+function randomViz() {
+    const r = () => Math.round(Math.random() * 10) / 10;
+    applyViz({
+        name: 'Random', note: 'randomised mixture — press again to reroll',
+        sunElevation: 8 + Math.random() * 50,
+        sunAzimuth: 120 + Math.random() * 120,
+        roughness: 0.15 + Math.random() * 0.6,
+        metalness: Math.random() * 0.8,
+        hemi: 1 + Math.random() * 6,
+        dir: 0.5 + Math.random() * 4,
+        slope: r() * 0.9, height: r() * 0.6, contour: r() * 0.8,
+        foam: r() * 0.9, face: r() * 0.9, grid: r() * 0.5,
+    });
+}
+
+function setViz(i: number) {
+    vizIndex = (i + VIZ_PRESETS.length) % VIZ_PRESETS.length;
+    applyViz(VIZ_PRESETS[vizIndex]);
+}
+
+function renderVizBar() {
+    vizBarEl.querySelectorAll('button').forEach((b, i) => {
+        b.classList.toggle('viz-btn--active', i === vizIndex);
+    });
+}
+
+function buildVizBar() {
+    vizBarEl.innerHTML = '';
+    VIZ_PRESETS.forEach((preset, i) => {
+        const b = document.createElement('button');
+        b.textContent = `${i}`;
+        b.title = `${preset.name} — ${preset.note}`;
+        b.addEventListener('click', () => {
+            setViz(i);
+            vizNoteEl.textContent = `${i}. ${preset.name} — ${preset.note}`;
+        });
+        vizBarEl.appendChild(b);
+    });
+    const rnd = document.createElement('button');
+    rnd.textContent = '\u21bb';
+    rnd.title = 'Random mixture';
+    rnd.addEventListener('click', () => {
+        randomViz();
+        vizNoteEl.textContent = 'random mixture — press again to reroll';
+    });
+    vizBarEl.appendChild(rnd);
+    renderVizBar();
+    vizNoteEl.textContent = `0. ${VIZ_STOCK.name} — ${VIZ_STOCK.note}`;
+}
+
+buildVizBar();
 
 
 // --- SEA STATE CONFIG PANEL ---
@@ -2614,6 +2896,16 @@ window.addEventListener('keydown', (e) => {
         case 'KeyV':
             resetChaseView();
             break;
+        case 'BracketLeft':
+            setViz(vizIndex - 1);
+            vizNoteEl.textContent =
+                `${vizIndex}. ${VIZ_PRESETS[vizIndex].name} — ${VIZ_PRESETS[vizIndex].note}`;
+            break;
+        case 'BracketRight':
+            setViz(vizIndex + 1);
+            vizNoteEl.textContent =
+                `${vizIndex}. ${VIZ_PRESETS[vizIndex].name} — ${VIZ_PRESETS[vizIndex].note}`;
+            break;
         case 'KeyI':
             setInstrumentsVisible(!instrumentsVisible);
             break;
@@ -3051,6 +3343,15 @@ function animate() {
     waterMesh.position.x = foilState.position.x;
     waterMesh.position.z = foilState.position.z;
     waterUniforms.uWorldOffset.value.set(foilState.position.x, foilState.position.z);
+
+    // Readability overlays need the rider's heading and a height scale
+    waterUniforms.uRideDir.value.set(
+        Math.sin(foilState.heading), Math.cos(foilState.heading)
+    );
+    let hsSq = 0;
+    for (const sw of SWELLS) if (sw.enabled) hsSq += sw.height * sw.height;
+    waterUniforms.uWaveScale.value = Math.max(0.5, Math.sqrt(hsSq));
+    waterUniforms.uSunDir.value.copy(sunDirection);
 
     // Physics step
     updatePhysics(dt, time);
