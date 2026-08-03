@@ -835,3 +835,7 @@ canvas {
   color: rgba(255, 255, 255, 0.45);
   margin: 14px 0 4px;
 }
+
+.swell-dir span:first-child {
+  min-width: 22px;
+}

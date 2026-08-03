@@ -427,7 +427,10 @@ function launchFoil() {
 // forecast reads it — significant height, peak period, direction — and expanded
 // into a band of spectral components by buildWaveField(), so wave groups (sets)
 // emerge from the physics instead of being faked.
-type SwellSize = 'small' | 'medium' | 'large';
+// Presets are the three buttons; 'custom' is what a row becomes once the
+// height or period slider is touched.
+type SwellPreset = 'small' | 'medium' | 'large';
+type SwellSize = SwellPreset | 'custom';
 
 // Size presets per swell system, as (significant height, peak period). Bigger
 // swell runs longer period too, the way a real sea state scales.
@@ -436,7 +439,7 @@ type SwellSize = 'small' | 'medium' | 'large';
 // faster than a foiler, so they just roll underneath. Matching a 9-10 m/s
 // rider means T ~ 5-7 s, which is 40-75 m between bumps. That is the band
 // people actually downwind in, so the primary swell lives there.
-const SWELL_SIZES: Record<SwellSize, { height: number; period: number }>[] = [
+const SWELL_SIZES: Record<SwellPreset, { height: number; period: number }>[] = [
     {   // Primary — the bumps you actually ride. Kept in the catchable band.
         small: { height: 1.0, period: 5.0 },   // 39 m, 15 kt crests
         medium: { height: 1.8, period: 6.0 },  // 56 m, 18 kt crests
@@ -444,9 +447,9 @@ const SWELL_SIZES: Record<SwellSize, { height: number; period: number }>[] = [
     },
     {   // Secondary — groundswell you ride over, not on. It modulates the
         // primary rather than being ridable itself.
-        small: { height: 0.5, period: 10.0 },
-        medium: { height: 0.9, period: 12.0 },
-        large: { height: 1.5, period: 14.0 },
+        small: { height: 0.9, period: 10.0 },
+        medium: { height: 1.6, period: 12.0 },
+        large: { height: 2.6, period: 14.0 },
     },
     {   // Wind chop — texture underfoot
         small: { height: 0.25, period: 2.8 },
@@ -464,6 +467,7 @@ function ridability(period: number): { text: string; color: string } {
 }
 
 const swellSize: SwellSize[] = ['medium', 'medium', 'medium'];
+const SIZE_BUTTONS: SwellPreset[] = ['small', 'medium', 'large'];
 const SWELL_COLORS = ['#60a5fa', '#a78bfa', '#94a3b8'];
 
 const SWELLS: SwellSpec[] = [
@@ -791,8 +795,66 @@ function generateNoiseTexture(size: number, gridPeriod: number): THREE.DataTextu
 const noiseTexture = generateNoiseTexture(NOISE_SIZE, NOISE_GRID_PERIOD);
 
 // --- WATER SHADER ---
-const waterGeometry = new THREE.PlaneGeometry(1500, 2000, 512, 512);
-waterGeometry.rotateX(-Math.PI / 2);
+/**
+ * Water grid with vertex density graded toward the centre.
+ *
+ * The mesh follows the player, so its centre is always under the board. A
+ * uniform 1500x2000 grid spread its vertices evenly and gave 2.9 m quads
+ * everywhere, which samples a 16 m chop wave about four times — it aliased
+ * into ripples. Warping the spacing gives sub-metre quads near the rider and
+ * coarse ones out in the fog, for the same vertex count.
+ *
+ * warp(t) = k*|t| + (1-k)*|t|^3, so k sets near-field density directly:
+ * centre spacing is halfSize * k * (2/segments).
+ */
+function createGradedWaterGeometry(
+    halfX: number, halfZ: number, segX: number, segZ: number, k: number
+): THREE.BufferGeometry {
+    const nx = segX + 1;
+    const nz = segZ + 1;
+    const positions = new Float32Array(nx * nz * 3);
+
+    const warp = (t: number) => {
+        const a = Math.abs(t);
+        return Math.sign(t) * (k * a + (1 - k) * a * a * a);
+    };
+
+    for (let j = 0; j < nz; j++) {
+        const z = warp((j / segZ) * 2 - 1) * halfZ;
+        for (let i = 0; i < nx; i++) {
+            const x = warp((i / segX) * 2 - 1) * halfX;
+            const o = (j * nx + i) * 3;
+            positions[o] = x;
+            positions[o + 1] = 0;
+            positions[o + 2] = z;
+        }
+    }
+
+    const index = new Uint32Array(segX * segZ * 6);
+    let p = 0;
+    for (let j = 0; j < segZ; j++) {
+        for (let i = 0; i < segX; i++) {
+            const a = j * nx + i;
+            const b = a + 1;
+            const c = a + nx;
+            const d = c + 1;
+            index[p++] = a; index[p++] = c; index[p++] = b;
+            index[p++] = b; index[p++] = c; index[p++] = d;
+        }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    // Normals come from the Gerstner tangents in the vertex shader; these
+    // attributes only need to exist for the standard material chunks.
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nx * nz * 3), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(nx * nz * 2), 2));
+    geo.setIndex(new THREE.BufferAttribute(index, 1));
+    geo.computeBoundingSphere();
+    return geo;
+}
+
+const waterGeometry = createGradedWaterGeometry(750, 1000, 512, isMobile ? 384 : 512, 0.12);
 
 const waterMaterial = new THREE.MeshStandardMaterial({
     color: PARAMS.waterColor,
@@ -1600,7 +1662,7 @@ const swellRowsEl = document.querySelector('#swell-rows') as HTMLElement;
 const swellSummaryEl = document.querySelector('#swell-summary') as HTMLElement;
 const swellBtnEl = document.querySelector('#swell-btn') as HTMLButtonElement;
 
-function applySwellSize(i: number, size: SwellSize) {
+function applySwellSize(i: number, size: SwellPreset) {
     swellSize[i] = size;
     SWELLS[i].height = SWELL_SIZES[i][size].height;
     SWELLS[i].period = SWELL_SIZES[i][size].period;
@@ -1621,10 +1683,16 @@ function buildSwellPanel() {
             `<span class="swell-swatch" style="background:${SWELL_COLORS[i]}"></span>` +
             `<span>${s.name}</span></label>` +
             `<div class="swell-sizes">` +
-            (['small', 'medium', 'large'] as SwellSize[]).map(sz =>
+            SIZE_BUTTONS.map(sz =>
                 `<button data-size="${sz}">${sz[0].toUpperCase() + sz.slice(1)}</button>`
             ).join('') +
             `</div>` +
+            `<div class="swell-dir"><span>HT&nbsp;</span>` +
+            `<input type="range" data-role="height" min="0" max="5" step="0.1" value="${s.height}">` +
+            `<span data-role="heightval">${s.height.toFixed(1)}m</span></div>` +
+            `<div class="swell-dir"><span>PER</span>` +
+            `<input type="range" data-role="period" min="2" max="18" step="0.5" value="${s.period}">` +
+            `<span data-role="periodval">${s.period.toFixed(1)}s</span></div>` +
             `<div class="swell-dir"><span>DIR</span>` +
             `<input type="range" data-role="dir" min="-90" max="90" step="1" value="${s.direction}">` +
             `<span data-role="dirval">${s.direction}°</span></div>` +
@@ -1636,10 +1704,24 @@ function buildSwellPanel() {
             renderSwellPanel();
         });
         row.querySelectorAll<HTMLButtonElement>('.swell-sizes button').forEach(b => {
-            b.addEventListener('click', () => applySwellSize(i, b.dataset.size as SwellSize));
+            b.addEventListener('click', () => applySwellSize(i, b.dataset.size as SwellPreset));
         });
         row.querySelector('[data-role="dir"]')!.addEventListener('input', (e) => {
             SWELLS[i].direction = Number((e.target as HTMLInputElement).value);
+            rebuildWaveField();
+            renderSwellPanel();
+        });
+        // Fine-tuning height or period puts the row into a custom state, so no
+        // size preset stays highlighted.
+        row.querySelector('[data-role="height"]')!.addEventListener('input', (e) => {
+            SWELLS[i].height = Number((e.target as HTMLInputElement).value);
+            swellSize[i] = 'custom';
+            rebuildWaveField();
+            renderSwellPanel();
+        });
+        row.querySelector('[data-role="period"]')!.addEventListener('input', (e) => {
+            SWELLS[i].period = Number((e.target as HTMLInputElement).value);
+            swellSize[i] = 'custom';
             rebuildWaveField();
             renderSwellPanel();
         });
@@ -1662,6 +1744,10 @@ function renderSwellPanel() {
 
         (row.querySelector('[data-role="dir"]') as HTMLInputElement).value = String(s.direction);
         row.querySelector('[data-role="dirval"]')!.textContent = `${s.direction}°`;
+        (row.querySelector('[data-role="height"]') as HTMLInputElement).value = String(s.height);
+        row.querySelector('[data-role="heightval"]')!.textContent = `${s.height.toFixed(1)}m`;
+        (row.querySelector('[data-role="period"]') as HTMLInputElement).value = String(s.period);
+        row.querySelector('[data-role="periodval"]')!.textContent = `${s.period.toFixed(1)}s`;
 
         const lambda = periodToWavelength(s.period);
         const c = periodToPhaseSpeed(s.period);
@@ -1675,7 +1761,14 @@ function renderSwellPanel() {
     // Combined sea state: variances add, so Hs adds in quadrature.
     let sumSq = 0;
     for (const s of SWELLS) if (s.enabled) sumSq += s.height * s.height;
-    swellSummaryEl.textContent = `Combined Hs ${Math.sqrt(sumSq).toFixed(1)} m`;
+    const clamped = waveField.steepnessScale < 0.999;
+    // Gerstner waves fold through themselves past a total steepness, so the
+    // field scales amplitudes down to stay physical. Say so rather than
+    // quietly ignoring what the sliders were set to.
+    swellSummaryEl.innerHTML = clamped
+        ? `Combined Hs ${(Math.sqrt(sumSq) * waveField.steepnessScale).toFixed(1)} m ` +
+          `<span style="color:#fbbf24">(capped — too steep)</span>`
+        : `Combined Hs ${Math.sqrt(sumSq).toFixed(1)} m`;
 
     updateSwellReadouts();
 }
@@ -2518,6 +2611,9 @@ window.addEventListener('keydown', (e) => {
                 resetFoilState();
             }
             break;
+        case 'KeyV':
+            resetChaseView();
+            break;
         case 'KeyI':
             setInstrumentsVisible(!instrumentsVisible);
             break;
@@ -2760,6 +2856,46 @@ const CHASE_CAM_SWING_SPEED = 1.0;
 let chaseCamLateralTarget = -CHASE_CAM_LATERAL_MAG;
 let chaseCamLateralSmoothed = -CHASE_CAM_LATERAL_MAG;
 
+// --- Chase camera mouse control ---
+// The chase framing stays automatic, but the wheel pulls the camera back and
+// dragging swings it around the rider. Useful for judging how big the swell
+// actually is, which is impossible from a fixed close-in view.
+const CHASE_BASE_DIST = 16;
+const CHASE_BASE_HEIGHT = 9;
+let chaseZoom = 1;
+let chaseYaw = 0;
+let chasePitch = 0;
+let chaseDragging = false;
+
+canvas.addEventListener('wheel', (e) => {
+    if (!useChaseCamera) return;
+    e.preventDefault();
+    chaseZoom = THREE.MathUtils.clamp(chaseZoom * Math.exp(e.deltaY * 0.0012), 0.35, 8);
+}, { passive: false });
+
+canvas.addEventListener('pointerdown', (e) => {
+    if (!useChaseCamera || e.button !== 0) return;
+    chaseDragging = true;
+    canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+    if (!chaseDragging) return;
+    chaseYaw += e.movementX * 0.005;
+    chasePitch = THREE.MathUtils.clamp(chasePitch + e.movementY * 0.004, -0.6, 1.1);
+});
+
+function endChaseDrag() { chaseDragging = false; }
+canvas.addEventListener('pointerup', endChaseDrag);
+canvas.addEventListener('pointercancel', endChaseDrag);
+
+/** Return the view to the default over-the-shoulder framing. */
+function resetChaseView() {
+    chaseZoom = 1;
+    chaseYaw = 0;
+    chasePitch = 0;
+}
+
 function updateChaseCamera(dt: number) {
     if (!useChaseCamera) {
         controls.enabled = true;
@@ -2786,16 +2922,23 @@ function updateChaseCamera(dt: number) {
     chaseCamLateralSmoothed += (chaseCamLateralTarget - chaseCamLateralSmoothed)
         * (1.0 - Math.exp(-CHASE_CAM_SWING_SPEED * dt));
 
-    _chaseCamPos.copy(boardGroup.position)
-        .addScaledVector(headDir, -16)
-        .addScaledVector(rightDir, chaseCamLateralSmoothed)
-        .setY(boardGroup.position.y + 9);
+    // Orbit offset applied on top of the automatic framing.
+    const cy = Math.cos(chaseYaw), sy = Math.sin(chaseYaw);
+    const backX = -headDir.x * cy - rightDir.x * sy;
+    const backZ = -headDir.z * cy - rightDir.z * sy;
+    const dist = CHASE_BASE_DIST * chaseZoom;
+
+    _chaseCamPos.set(
+        boardGroup.position.x + backX * dist + rightDir.x * chaseCamLateralSmoothed * chaseZoom,
+        boardGroup.position.y + CHASE_BASE_HEIGHT * chaseZoom + chasePitch * dist,
+        boardGroup.position.z + backZ * dist + rightDir.z * chaseCamLateralSmoothed * chaseZoom
+    );
 
     const followFactor = 1.0 - Math.exp(-3.0 * dt);
     camera.position.lerp(_chaseCamPos, followFactor);
 
     _chaseLookAt.copy(boardGroup.position)
-        .addScaledVector(headDir, 8);
+        .addScaledVector(headDir, 8 * Math.min(chaseZoom, 2));
 
     camera.lookAt(_chaseLookAt);
 }
