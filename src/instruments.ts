@@ -502,17 +502,24 @@ export function drawTrimGauge(
     for (let i = 1; i <= steps; i++) ctx.lineTo(dx0 + (i / steps) * dw, mToPx(surfPx[i]));
     ctx.stroke();
 
-    // Ventilation band: wing inside this depth of the surface starts losing grip
-    ctx.fillStyle = 'rgba(239,83,80,0.16)';
+    // Ventilation band. The front wing inside this depth of the surface starts
+    // pulling air down its low-pressure side and loses lift; break through and
+    // you breach. Everything below the dashed line is clean water.
+    const wingInBand = rider.wingDepth < rider.ventDepth;
+    ctx.fillStyle = wingInBand ? 'rgba(239,83,80,0.30)' : 'rgba(239,83,80,0.14)';
     ctx.fillRect(dx0, mToPx(0), dw, rider.ventDepth * scale);
     ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = 'rgba(239,83,80,0.5)';
+    ctx.strokeStyle = wingInBand ? 'rgba(239,83,80,0.9)' : 'rgba(239,83,80,0.45)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(dx0, mToPx(-rider.ventDepth));
     ctx.lineTo(dx0 + dw, mToPx(-rider.ventDepth));
     ctx.stroke();
     ctx.setLineDash([]);
+    label(
+        ctx, 'VENT', dx0 + 3, mToPx(-rider.ventDepth) - 3,
+        wingInBand ? RED : 'rgba(239,83,80,0.55)', 'left', 7
+    );
 
     // --- The rig, side on, nose to the right ------------------------------
     // Board, mast, fuselage, front wing and stabiliser are one rigid body, so
@@ -523,8 +530,15 @@ export function drawTrimGauge(
     const breaching = rider.ventFactor < 0.6;
     const rigColor = breaching ? RED : rider.rideHeight < 0.1 ? AMBER : '#fff';
 
-    const mastX = dcx - dw * 0.12;              // aft of centre
+    // Mast sits well aft on the board, under the rider's back foot, and joins
+    // the fuselage just behind the front wing — so most of the fuselage trails
+    // aft to the stabiliser, which is what a foil actually looks like.
+    const mastX = dcx - dw * 0.16;
     const mastPx = rider.mastLength * scale;
+    // Fuselage runs ~40% of board length, the way a real one does, with the
+    // mast joining about a quarter of the way back from the front wing.
+    const FUSE_FWD = dw * 0.07;
+    const FUSE_AFT = dw * 0.19;
 
     // Pitch and AoA are amplified so small trim changes stay legible here.
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -559,27 +573,28 @@ export function drawTrimGauge(
     // Fuselage
     ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(-dw * 0.14, mastPx);
-    ctx.lineTo(dw * 0.17, mastPx);
+    ctx.moveTo(-FUSE_AFT, mastPx);
+    ctx.lineTo(FUSE_FWD, mastPx);
     ctx.stroke();
 
-    // Front wing, forward on the fuselage, tilted by angle of attack
+    // Front wing — the lifting surface, and the part that has to stay buried.
+    // Drawn heaviest of everything so it reads as the thing to watch.
     ctx.save();
-    ctx.translate(dw * 0.17, mastPx);
+    ctx.translate(FUSE_FWD, mastPx);
     ctx.rotate(aoaVis);
     ctx.fillStyle = wingColor;
     ctx.beginPath();
-    ctx.ellipse(0, 0, dw * 0.18, 2.0, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, dw * 0.09, 2.6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     // Rear stabiliser
     ctx.save();
-    ctx.translate(-dw * 0.14, mastPx);
+    ctx.translate(-FUSE_AFT, mastPx);
     ctx.rotate(aoaVis);
     ctx.fillStyle = wingColor;
     ctx.beginPath();
-    ctx.ellipse(0, 0, dw * 0.075, 1.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, dw * 0.05, 1.6, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
