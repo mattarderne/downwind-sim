@@ -1,0 +1,52 @@
+# Publishes a playable build to GitHub Pages.
+#
+# This exists only on the fork, to preview the wave-train physics work. The
+# upstream project deploys from its own host, so nothing here should be merged
+# back — drop this file if opening a PR to cclaan/downwind-sim.
+#
+# vite.config.ts already sets base: '/downwind-sim/', which is exactly the path
+# a project Pages site is served from, so no config change is needed. outDir is
+# overridden on the command line because the committed value writes outside the
+# repository.
+name: Deploy preview to Pages
+
+on:
+  push:
+    branches: [feat/wave-trains]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vite build --outDir dist --emptyOutDir
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
