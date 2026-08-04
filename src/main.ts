@@ -119,11 +119,11 @@ const MAST_DRAG_AREA = 0.0014;
 // Velocity kick (m/s) added per pump — higher = bigger speed burst each pump
 const PUMP_IMPULSE = 2.0;
 // Energy spent per pump — higher = fewer pumps before you're drained
-const PUMP_COST = 20;
+let PUMP_COST = 20;
 // Minimum seconds between pumps — prevents spam-pumping for free speed
 const PUMP_COOLDOWN = 0.35;
 // Energy recovered per second — controls how quickly you can pump again
-const ENERGY_REGEN = 5;
+let ENERGY_REGEN = 5;
 // Max bank angle (~30°) — limits how hard you can lean into turns
 const MAX_ROLL = Math.PI / 6;
 // Max pitch angle (~5°) — visual board attitude, driven by foot pressure
@@ -137,14 +137,17 @@ const ALPHA_NEUTRAL = 2.4 * Math.PI / 180;
 // by roughly the surface slope, which needs a comparable change in angle of
 // attack. Wave faces here reach 12-13 degrees, so 5 degrees left the rider
 // unable to follow a face at all — they simply sank through it.
-const ALPHA_RANGE = 9.0 * Math.PI / 180;
+let ALPHA_RANGE = 9.0 * Math.PI / 180;
 // Stall angle — beyond this CL collapses and you fall off foil.
 const ALPHA_STALL = 15.0 * Math.PI / 180;
 // Wing depth (m) below which the foil starts ventilating and loses lift.
 // This is the breach mechanic: fly too high and the wing sucks air.
-const VENT_DEPTH = 0.30;
+const VENT_DEPTH = 0.18;
 // How fast foot pressure follows input (1/s) — rider weight-shift rate.
-const FOOT_RESPONSE = 4.5;
+// Deliberately unhurried. With 9 degrees of angle-of-attack authority a fast
+// ramp turns a key tap into a large lift step, and the board visibly bobs. A
+// rider shifts weight over a moment, not instantly.
+const FOOT_RESPONSE = 3.0;
 // Extra vertical damping beyond the natural AoA feedback.
 const HEAVE_DAMPING = 0.6;
 // Roll spring stiffness — higher = snappier response to turn input
@@ -1025,7 +1028,7 @@ if (import.meta.env.DEV) (window as any).__sea = {
     launch: () => launchFoil(),
     reset: () => resetFoilState(),
     /** Advance physics by a fixed step — deterministic, frame-rate independent. */
-    step: (dt: number, t: number) => updatePhysics(dt, t),
+    step: (dt: number, t: number) => stepPhysics(dt, t),
     height: (x: number, z: number, t: number) => waterHeightFast(waveField, x, z, t),
     analyse: (i: number, x: number, z: number, t: number) =>
         analyseSwell(waveField, i, x, z, t),
@@ -2018,6 +2021,136 @@ function buildVizBar() {
 buildVizBar();
 
 
+// --- DIFFICULTY ---
+// Each tier is a whole package: which swells are running, which foil, and how
+// freely energy flows. They are built around the c/V ratio — a swell whose
+// crests match your cruising speed can be ridden in a straight line, while a
+// slower swell forces you to angle across it to stay connected.
+
+interface Difficulty {
+    name: string;
+    blurb: string;
+    foil: string;
+    swells: { enabled: boolean; height: number; period: number; direction: number }[];
+    pumpCost: number;
+    energyRegen: number;
+    /** Angle-of-attack authority; less means a calmer, less twitchy board. */
+    alphaRangeDeg: number;
+}
+
+const DIFFICULTIES: Record<string, Difficulty> = {
+    Easy: {
+        name: 'Easy',
+        blurb: 'One swell, matched to your speed — point downwind and go',
+        foil: 'Beginner 1600',      // cruises ~13.5 kt
+        swells: [
+            // c/V ~ 1.0 at the ~18.5 kt this tier actually rides at, so a
+            // straight line stays in sync with the swell and nothing is asked
+            // of the player but to stay on foil.
+            { enabled: true, height: 1.1, period: 6.2, direction: 0 },  // crests ~18.8 kt
+            { enabled: false, height: 0.8, period: 11.0, direction: 25 },
+            { enabled: false, height: 0.4, period: 3.0, direction: 6 },
+        ],
+        pumpCost: 12,
+        energyRegen: 14,
+        alphaRangeDeg: 6.5,
+    },
+    Medium: {
+        name: 'Medium',
+        blurb: 'Swell plus wind chop — the chop carries nearly half the drive',
+        foil: 'Mid Aspect 1000',    // cruises ~16.6 kt
+        swells: [
+            // c/V ~ 0.9: angling by ~25 deg noticeably helps, but straight is
+            // still survivable.
+            { enabled: true, height: 1.8, period: 6.0, direction: 0 },  // crests ~18.2 kt
+            { enabled: false, height: 1.0, period: 11.0, direction: 25 },
+            { enabled: true, height: 0.7, period: 3.5, direction: 8 },
+        ],
+        pumpCost: 16,
+        energyRegen: 8,
+        alphaRangeDeg: 8.0,
+    },
+    Hard: {
+        name: 'Hard',
+        blurb: 'Two crossing swells on a race foil — fast enough that you must angle',
+        // The sea here is only a little bigger than Medium. What makes it hard
+        // is the FOIL: a race wing rides ~22 kt against 17.6 kt crests, so
+        // c/V ~ 0.8 and the swell is now slower than you. Holding a bump means
+        // angling ~37 deg; straight means climbing the back of every wave.
+        // The same water is gentle on a big wing and technical on a fast one.
+        foil: 'Race 700',           // cruises ~19.5 kt
+        swells: [
+            // c/V ~ 0.85: the swell is slower than you, so holding a bump
+            // requires angling ~32 deg. Riding straight means climbing the
+            // back of every wave.
+            { enabled: true, height: 2.1, period: 5.8, direction: 0 },
+            { enabled: true, height: 1.0, period: 12.0, direction: 30 },
+            { enabled: true, height: 0.6, period: 3.8, direction: 6 },
+        ],
+        pumpCost: 20,
+        energyRegen: 5,
+        alphaRangeDeg: 9.0,
+    },
+};
+
+let currentDifficulty = 'Medium';
+
+function applyDifficulty(key: string) {
+    const d = DIFFICULTIES[key];
+    if (!d) return;
+    currentDifficulty = key;
+    for (let i = 0; i < SWELLS.length; i++) {
+        Object.assign(SWELLS[i], d.swells[i]);
+        swellSize[i] = 'custom';
+    }
+    activeFoil = { ...FOIL_PRESETS[d.foil] };
+    PARAMS.selectedFoil = d.foil;
+    PUMP_COST = d.pumpCost;
+    ENERGY_REGEN = d.energyRegen;
+    ALPHA_RANGE = d.alphaRangeDeg * Math.PI / 180;
+    rebuildWaveField();
+    renderSwellPanel();
+    renderRigPanel();
+    renderDifficulty();
+    gui.controllersRecursive().forEach(c => c.updateDisplay());
+}
+
+/** Any manual edit drops out of a named tier into Custom. */
+function markCustom() {
+    if (currentDifficulty !== 'Custom') {
+        currentDifficulty = 'Custom';
+        renderDifficulty();
+    }
+}
+
+const diffRowEl = document.querySelector('#difficulty-row') as HTMLElement;
+const diffBlurbEl = document.querySelector('#difficulty-blurb') as HTMLElement;
+const statusChipEl = document.querySelector('#status-chip') as HTMLElement;
+
+function renderDifficulty() {
+    diffRowEl.querySelectorAll<HTMLButtonElement>('button').forEach(b => {
+        b.classList.toggle('diff-btn--active', b.dataset.diff === currentDifficulty);
+    });
+    const d = DIFFICULTIES[currentDifficulty];
+    diffBlurbEl.textContent = d ? d.blurb : 'Custom conditions';
+    // Always-visible chip, so it is never a mystery what you are riding
+    const active = SWELLS.filter(s => s.enabled).length;
+    statusChipEl.innerHTML =
+        `<span class="chip-diff">${currentDifficulty}</span>` +
+        `<span class="chip-foil">${activeFoil.name}</span>` +
+        `<span class="chip-sea">${active} swell${active === 1 ? '' : 's'}</span>`;
+}
+
+function buildDifficulty() {
+    diffRowEl.innerHTML = Object.keys(DIFFICULTIES)
+        .map(k => `<button data-diff="${k}">${k}</button>`).join('');
+    diffRowEl.querySelectorAll<HTMLButtonElement>('button').forEach(b => {
+        b.addEventListener('click', () => applyDifficulty(b.dataset.diff!));
+    });
+    renderDifficulty();
+}
+
+
 // --- SEA STATE CONFIG PANEL ---
 // Plain HTML rather than lil-gui: it has to work on a phone, which is where
 // most people hit this, and small/medium/large is a faster decision than
@@ -2081,13 +2214,13 @@ function buildSwellPanel() {
         // size preset stays highlighted.
         row.querySelector('[data-role="height"]')!.addEventListener('input', (e) => {
             SWELLS[i].height = Number((e.target as HTMLInputElement).value);
-            swellSize[i] = 'custom';
+            swellSize[i] = 'custom'; markCustom();
             rebuildWaveField();
             renderSwellPanel();
         });
         row.querySelector('[data-role="period"]')!.addEventListener('input', (e) => {
             SWELLS[i].period = Number((e.target as HTMLInputElement).value);
-            swellSize[i] = 'custom';
+            swellSize[i] = 'custom'; markCustom();
             rebuildWaveField();
             renderSwellPanel();
         });
@@ -2175,6 +2308,7 @@ function buildRigPanel() {
         const k = (e.target as HTMLSelectElement).value;
         activeFoil = { ...FOIL_PRESETS[k] };
         PARAMS.selectedFoil = k;
+        markCustom();
         gui.controllersRecursive().forEach(c => c.updateDisplay());
         renderRigPanel();
     });
@@ -2214,6 +2348,8 @@ function renderRigPanel() {
 }
 
 buildRigPanel();
+buildDifficulty();
+applyDifficulty('Medium');
 
 function setSwellPanelOpen(open: boolean) {
     swellPanelEl.classList.toggle('swell-panel--hidden', !open);
@@ -3095,10 +3231,30 @@ window.addEventListener('keyup', (e) => {
 
 
 // --- PHYSICS UPDATE ---
+
+// Longest step the flight model may take. The angle-of-attack feedback gives an
+// effective heave damping around 30/s, and an explicit integrator only stays
+// stable while damping*dt stays well under 1. At 60 fps that product is 0.5,
+// but a dropped frame doubles it and the heave loop rings — a visible ~1 Hz
+// wobble in board height and pitch that has nothing to do with the waves.
+// Sub-stepping keeps the product near 0.25 whatever the frame rate, which also
+// makes the sim frame-rate independent, so times are comparable between
+// machines.
+const PHYSICS_MAX_STEP = 1 / 240;
+
+/** Advance the flight model, subdividing so one long frame cannot ring it. */
+function stepPhysics(dt: number, time: number) {
+    if (gameState !== 'riding') return;
+    const total = Math.min(dt, 1 / 20);
+    const n = Math.max(1, Math.ceil(total / PHYSICS_MAX_STEP));
+    const h = total / n;
+    for (let i = 0; i < n && gameState === 'riding'; i++) {
+        updatePhysics(h, time + i * h);
+    }
+}
+
 function updatePhysics(dt: number, time: number) {
     if (gameState !== 'riding') return;
-
-    dt = Math.min(dt, 1 / 30);
 
     const foil = activeFoil;
     const speed = foilState.velocity.length();
@@ -3149,7 +3305,10 @@ function updatePhysics(dt: number, time: number) {
     foilState.roll = THREE.MathUtils.clamp(foilState.roll, -MAX_ROLL * 1.2, MAX_ROLL * 1.2);
 
     // Board attitude follows foot pressure (visual + used for wave-relative trim)
-    foilState.pitch += (foilState.footPressure * MAX_PITCH - foilState.pitch) * 5.0 * dt;
+    // Visual board attitude only — filtered harder than the control itself so
+    // the model reads as a rider leaning rather than a snapping hinge.
+    foilState.pitch +=
+        (foilState.footPressure * MAX_PITCH - foilState.pitch) * Math.min(1, 2.5 * dt);
 
     // --- Foil flight: angle of attack drives lift ---
     // Wing depth below the surface. rideHeight is the board above the water, so
@@ -3601,7 +3760,7 @@ function animate() {
     waterUniforms.uSunDir.value.copy(sunDirection);
 
     // Physics step
-    updatePhysics(dt, time);
+    stepPhysics(dt, time);
 
     // Race logic
     updateRace(dt, time);

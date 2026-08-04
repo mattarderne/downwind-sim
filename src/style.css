@@ -927,3 +927,75 @@ canvas {
 .rig-row select option {
   background: #0b1c2c;
 }
+
+/* ---------- difficulty ---------- */
+#difficulty-row {
+  display: flex;
+  gap: 4px;
+}
+
+#difficulty-row button {
+  flex: 1;
+  font-family: monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+#difficulty-row button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+#difficulty-row button.diff-btn--active {
+  color: #0b1c2c;
+  background: #4ade80;
+  border-color: #4ade80;
+  font-weight: bold;
+}
+
+#difficulty-blurb {
+  font-size: 9px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+  margin-top: 5px;
+}
+
+/* ---------- always-visible setup chip ---------- */
+#status-chip {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99;
+  display: flex;
+  gap: 6px;
+  font-family: monospace;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+#status-chip span {
+  background: rgba(0, 18, 36, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 3px 8px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+#status-chip .chip-diff {
+  color: #4ade80;
+  font-weight: bold;
+}
+
+#status-chip .chip-foil {
+  color: #4fc3f7;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  #status-chip { top: 4px; transform: translateX(-50%) scale(0.85); }
+}

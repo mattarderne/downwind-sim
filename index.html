@@ -124,6 +124,9 @@
       <canvas id="inst-trim"></canvas>
     </div>
 
+    <!-- Always-visible summary of what you are riding -->
+    <div id="status-chip"></div>
+
     <!-- Sea state config -->
     <button id="swell-btn" title="Sea state (S)">≋ SWELL</button>
     <div id="swell-panel" class="swell-panel--hidden">
@@ -131,6 +134,10 @@
         <span>SEA STATE</span>
         <button id="swell-close" aria-label="Close">✕</button>
       </div>
+      <div class="swell-subhead" style="margin-top:0;padding-top:0;border-top:none">DIFFICULTY</div>
+      <div id="difficulty-row"></div>
+      <div id="difficulty-blurb"></div>
+      <div class="swell-subhead">SEA STATE</div>
       <div id="swell-rows"></div>
       <div class="swell-subhead">RIG &amp; WIND</div>
       <div id="rig-rows"></div>
