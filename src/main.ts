@@ -245,6 +245,10 @@ const foilState = {
     apparentWind: 0,
     /** Apparent wind bearing, radians (direction it blows toward). */
     apparentWindDir: 0,
+    /** Touchdowns survived this run. */
+    touchdowns: 0,
+    /** Countdown for the on-screen skip flash. */
+    skipFlashTimer: 0,
     /** Why the last crash happened, for the HUD message. */
     crashReason: '' as '' | 'breach' | 'touchdown' | 'stall',
 };
@@ -452,6 +456,8 @@ function resetFoilState() {
     foilState.ventFactor = 1;
     foilState.orbitalW = 0;
     foilState.crashReason = '';
+    foilState.touchdowns = 0;
+    foilState.skipFlashTimer = 0;
     gameState = 'starting';
     prevGameState = null;
     clearWakeTrail();
@@ -1544,6 +1550,8 @@ function updateHUD() {
     hudHeightFill.style.width = `${heightPct}%`;
     hudHeightFill.style.background = heightPct < 20 ? '#ef5350' : '#4fc3f7';
 
+    skipFlashEl.style.opacity = foilState.skipFlashTimer > 0 ? '1' : '0';
+
     hudEnergy.textContent = `Energy: ${Math.round(foilState.energy)}`;
     hudEnergyFill.style.width = `${foilState.energy}%`;
 
@@ -1561,17 +1569,23 @@ function updateHUD() {
             ? `race to ${RACE_LENGTH_KM} km · pump to stay on foil`
             : `race to ${RACE_LENGTH_KM} km · pump to stay on foil · loading rider…`;
         raceDistancePicker.style.display = 'flex';
+        const rules = currentDifficulty === 'Easy'
+            ? '\n\nBoard touches water = down · wing breaks surface = breach' +
+              '\nCarry speed and a touchdown skips instead'
+            : '';
         if (isMobile) {
-            hudControls.textContent = 'Tap to launch · Drag to steer & trim';
+            hudControls.textContent = 'Tap to launch · Drag to steer & trim' + rules;
         } else {
-            hudControls.textContent = '← → Turn  ·  ↑ nose down  ↓ nose up  ·  SPACE Pump\n\n    Press SPACE to launch';
+            hudControls.textContent =
+                '← → Turn  ·  ↑ nose down  ↓ nose up  ·  SPACE Pump' + rules +
+                '\n\n    Press SPACE to launch';
         }
         hudLeaderboard.innerHTML = cachedTop3HTML;
         hudLeaderboard.style.display = cachedTop3HTML ? '' : 'none';
     } else if (gameState === 'crashed') {
         hudTitle.textContent = 'Off Foil!';
         hudSubtitle.textContent = '';
-        hudControls.textContent = isMobile ? 'Tap to restart' : 'Press R to restart';
+        hudControls.textContent = isMobile ? 'Tap to restart' : 'SPACE to go again  ·  R to reset';
         raceDistancePicker.style.display = 'none';
         hudLeaderboard.style.display = 'none';
     } else {
@@ -1585,6 +1599,7 @@ function updateHUD() {
 
 
 // --- RACE HUD ELEMENTS (defined in index.html, styled in style.css) ---
+const skipFlashEl = document.querySelector('#skip-flash') as HTMLElement;
 const raceTimerEl = document.querySelector('#race-timer') as HTMLElement;
 const kmTickRow = document.querySelector('#km-tick-row') as HTMLElement;
 const kmSplitsRow = document.querySelector('#km-splits-row') as HTMLElement;
@@ -2072,14 +2087,23 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         swells: [
             // c/V ~ 0.9: angling by ~25 deg noticeably helps, but straight is
             // still survivable.
-            { enabled: true, height: 1.8, period: 6.0, direction: 0 },  // crests ~18.2 kt
+            // Period follows riding speed, and riding speed moved when the
+            // adverse-thrust penalty was halved — less braking on the back of a
+            // wave means a faster rider, which lowers c/V and demands a bigger
+            // sync angle. Re-set so c/V lands near 0.93 again.
+            { enabled: true, height: 1.8, period: 6.4, direction: 0 },  // crests ~19.4 kt
             { enabled: false, height: 1.0, period: 11.0, direction: 25 },
-            { enabled: true, height: 0.7, period: 3.5, direction: 8 },
+            // Chop is the most destabilising part of any sea: short wavelength
+            // means high curvature, so the wingtips are thrown about faster than
+            // the wing can follow. At 0.7 m / 3.5 s it alone took Medium from
+            // 5/5 to 0/5. Softened and lengthened — it still carries a large
+            // share of the thrust without being unflyable.
+            { enabled: true, height: 0.5, period: 4.0, direction: 8 },
         ],
-        pumpCost: 16,
-        energyRegen: 8,
+        pumpCost: 14,
+        energyRegen: 10,
         alphaRangeDeg: 8.0,
-        vizMode: 5,    // contours only
+        vizMode: 7,    // rideable faces — green downhill, red climbing
         showTrim: true,
     },
     Hard: {
@@ -3228,6 +3252,10 @@ window.addEventListener('keydown', (e) => {
                 launchFoil();
             } else if (gameState === 'riding') {
                 input.pump = true;
+            } else if (gameState === 'crashed') {
+                // Space restarts too, so a bad run costs one key, not two.
+                resetFoilState();
+                launchFoil();
             }
             break;
         case 'KeyR':
@@ -3435,7 +3463,11 @@ function updatePhysics(dt: number, time: number) {
     // with V^2. The two cross at a natural terminal speed instead of letting
     // pump-spam run away.
     const flowTilt = Math.atan2(orbitalW - foilState.vy, vRef);
-    const thrustMag = liftMag * Math.sin(flowTilt) * WAVE_ENERGY_MULT;
+    // Adverse thrust — climbing the back of a bump — is halved. At full
+    // strength a crest cost about 7 kt, which stopped a run dead rather than
+    // costing a bump. Driving thrust is untouched, so a good line still pays.
+    const rawThrust = liftMag * Math.sin(flowTilt) * WAVE_ENERGY_MULT;
+    const thrustMag = rawThrust < 0 ? rawThrust * 0.5 : rawThrust;
     if (speed > 0.5) {
         force.addScaledVector(foilState.velocity.clone().normalize(), thrustMag);
     } else {
@@ -3505,8 +3537,11 @@ function updatePhysics(dt: number, time: number) {
         // which made the waves decorative — there was no reason to hunt a bump.
         // Pumping is now a connection and recovery tool: it will get you moving
         // and rescue a bad moment, but it cannot substitute for the swell.
+        // Squared falloff keeps pumping from replacing the swell, but it is
+        // floored: with energy in hand a pump should always drive you over the
+        // back of a bump rather than leaving you stranded on the wrong side.
         const r = trimSpeedFor(foil, riderMass) / Math.max(speed, 0.5);
-        const pumpGain = Math.min(1, r * r);
+        const pumpGain = Math.max(0.4, Math.min(1, r * r));
         foilState.velocity.addScaledVector(pumpDir, PUMP_IMPULSE * pumpGain);
         foilState.energy -= PUMP_COST;
         foilState.lastPumpTime = time;
@@ -3564,11 +3599,26 @@ function updatePhysics(dt: number, time: number) {
     }
 
     foilState.speed = foilState.velocity.length();
+    if (foilState.skipFlashTimer > 0) foilState.skipFlashTimer -= dt;
 
     // --- Check crash ---
     if (foilState.rideHeight <= 0.001) {
-        // Board has hit the water.
-        crashFoil(foilState.speed < stallSpeedFor(foil, riderMass) * 0.9 ? 'stall' : 'touchdown');
+        // Touching down is not automatically the end. Carrying speed, the board
+        // skips off the surface and flies again at a cost. This is what lets a
+        // rider commit to a dive down a face: the whole 0.8 m mast is only
+        // worth about 1.4 kt, but a 2 m wave face is worth 3.4 kt, and you
+        // cannot collect that if brushing the water ends the run.
+        const vMin = stallSpeedFor(foil, riderMass);
+        if (foilState.speed > vMin * 1.45) {
+            foilState.rideHeight = 0.05;
+            foilState.worldY = foilState.surfaceY + 0.05;
+            foilState.vy = Math.max(foilState.vy, 0.8);
+            foilState.velocity.multiplyScalar(0.94);   // skipping costs speed
+            foilState.touchdowns++;
+            foilState.skipFlashTimer = 0.7;
+        } else {
+            crashFoil(foilState.speed < vMin * 0.9 ? 'stall' : 'touchdown');
+        }
     } else if (wingDepth < 0.065 && foilState.vy - foilState.orbitalW > 0.15) {
         // Wing has broken the surface while still climbing — a breach.
         //
