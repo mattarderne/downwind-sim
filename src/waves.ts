@@ -384,3 +384,18 @@ export function dominantSwell(
     }
     return { index: best, analysis: bestAnalysis };
 }
+
+/**
+ * Surface height from a single swell only, so the primary and secondary trains
+ * can be drawn apart from each other and from the chop.
+ */
+export function swellHeightAt(
+    field: WaveField, swellIndex: number, x: number, z: number, time: number
+): number {
+    let y = 0;
+    for (const w of field.components) {
+        if (w.swell !== swellIndex) continue;
+        y += w.amp * Math.sin(w.k * (w.dx * x + w.dz * z) - w.omega * time + w.phase);
+    }
+    return y;
+}

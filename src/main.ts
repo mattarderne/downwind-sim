@@ -156,9 +156,11 @@ const ROLL_SPRING = 6.0;
 const ROLL_DAMPING = 3.0;
 // Wave-induced roll strength — higher = more wobble from uneven wave surface across the wing
 const WAVE_TORQUE_GAIN = 2.0;
-// Wave thrust multiplier. The term below is physically derived, so 1.0 is the
-// honest value; this only exists to exaggerate or damp it for feel.
-const WAVE_ENERGY_MULT = 1.0;
+// Drive multiplier on the accelerating side of a wave. The underlying term is
+// physically derived, so 1.0 is the honest value; above that is a deliberate
+// game-feel choice, trading strict accuracy for a bump you can feel drop away
+// beneath you. The original game effectively ran about 2.5.
+let WAVE_ENERGY_MULT = 1.7;
 // Sideways slip decay rate — higher = tighter tracking along heading, less drift in turns
 const LATERAL_RESISTANCE = 1.0;
 // Air density (kg/m^3) for the aerodynamic force on rider and board
@@ -1030,6 +1032,8 @@ if (import.meta.env.DEV) (window as any).__sea = {
     get foil() { return foilState; },
     get input() { return input; },
     get time() { return clock.elapsedTime; },
+    set drive(v: number) { WAVE_ENERGY_MULT = v; },
+    get drive() { return WAVE_ENERGY_MULT; },
     rebuild: () => rebuildWaveField(),
     launch: () => launchFoil(),
     reset: () => resetFoilState(),
@@ -3057,7 +3061,7 @@ const _riderReadout: RiderReadout = {
     x: 0, z: 0, heading: 0, track: 0, speed: 0, rideHeight: 0,
     mastLength: MAST_LENGTH, footPressure: 0, footPressureTrim: 0, alpha: 0,
     alphaTrim: 0, inflowAngle: 0,
-    loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, roll: 0, pitch: 0,
+    loadFactor: 1, wingDepth: 0, ventFactor: 1, orbitalW: 0, waveThrust: 0, roll: 0, pitch: 0,
     onFoil: true, surfaceHeight: 0, ventDepth: VENT_DEPTH,
 };
 
@@ -3082,6 +3086,7 @@ function drawInstruments(time: number) {
     r.wingDepth = foilState.wingDepth;
     r.ventFactor = foilState.ventFactor;
     r.orbitalW = foilState.orbitalW;
+    r.waveThrust = foilState.waveThrust;
     r.roll = foilState.roll;
     r.pitch = foilState.pitch;
     r.onFoil = foilState.onFoil;
@@ -3469,8 +3474,14 @@ function updatePhysics(dt: number, time: number) {
     // Adverse thrust — climbing the back of a bump — is halved. At full
     // strength a crest cost about 7 kt, which stopped a run dead rather than
     // costing a bump. Driving thrust is untouched, so a good line still pays.
-    const rawThrust = liftMag * Math.sin(flowTilt) * WAVE_ENERGY_MULT;
-    const thrustMag = rawThrust < 0 ? rawThrust * 0.5 : rawThrust;
+    // Asymmetric on purpose. The driving side is amplified so dropping into a
+    // face gives a shove you can feel, while the braking side stays halved so
+    // climbing the back costs a bump rather than the run. Scaling both together
+    // just made the ride slower on average without feeling any livelier.
+    const rawThrust = liftMag * Math.sin(flowTilt);
+    const thrustMag = rawThrust < 0
+        ? rawThrust * 0.5
+        : rawThrust * WAVE_ENERGY_MULT;
     if (speed > 0.5) {
         force.addScaledVector(foilState.velocity.clone().normalize(), thrustMag);
     } else {

@@ -11,6 +11,7 @@
 import {
     analyseSwell,
     waterHeightFast,
+    swellHeightAt,
     type WaveField,
 } from './waves';
 
@@ -32,6 +33,8 @@ export interface RiderReadout {
     wingDepth: number;
     ventFactor: number;
     orbitalW: number;
+    /** Forward drive from the wave right now, newtons. */
+    waveThrust: number;
     roll: number;
     pitch: number;
     onFoil: boolean;
@@ -110,22 +113,35 @@ export function drawWaveTrain(
     const midY = padT + plotH / 2;
 
     const total = opts.behind + opts.ahead;
-    const dirX = Math.sin(rider.heading);
-    const dirZ = Math.cos(rider.heading);
 
-    // Sample the surface and envelope along the heading line.
+    // Sampled along the PRIMARY SWELL's direction, not the rider's heading.
+    // Heading-relative sampling swung the whole trace around every time the
+    // board turned, which made it unreadable; the swell direction is fixed, so
+    // the wave train holds still and the rider moves through it.
+    const d = field.derived[opts.swellIndex] ?? field.derived[0];
+    const dirX = d.dirX;
+    const dirZ = d.dirZ;
+
     const N = Math.max(48, Math.min(220, Math.floor(plotW)));
-    const surf = new Float32Array(N);
+    const prim = new Float32Array(N);
+    const sec = new Float32Array(N);
     const envU = new Float32Array(N);
     let maxAbs = 0.35;
 
+    // Second swell, if there is one running
+    let secIdx = -1;
+    for (let i = 0; i < field.derived.length; i++) {
+        if (i !== opts.swellIndex && field.carrier[i] >= 0 && i !== 2) { secIdx = i; break; }
+    }
+
     for (let i = 0; i < N; i++) {
-        const s = -opts.behind + (i / (N - 1)) * total;
-        const x = rider.x + dirX * s;
-        const z = rider.z + dirZ * s;
-        surf[i] = waterHeightFast(field, x, z, time);
+        const sPos = -opts.behind + (i / (N - 1)) * total;
+        const x = rider.x + dirX * sPos;
+        const z = rider.z + dirZ * sPos;
+        prim[i] = swellHeightAt(field, opts.swellIndex, x, z, time);
+        sec[i] = secIdx >= 0 ? swellHeightAt(field, secIdx, x, z, time) : 0;
         envU[i] = analyseSwell(field, opts.swellIndex, x, z, time).envelope;
-        const a = Math.max(Math.abs(surf[i]), envU[i]);
+        const a = Math.max(Math.abs(prim[i]) + Math.abs(sec[i]), envU[i]);
         if (a > maxAbs) maxAbs = a;
     }
 
@@ -133,16 +149,14 @@ export function drawWaveTrain(
     const sx = (i: number) => padL + (i / (N - 1)) * plotW;
     const sy = (v: number) => midY - v * yScale;
 
-    // Mean water line
     ctx.strokeStyle = FAINT;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padL, midY);
-    ctx.lineTo(padL + plotW, midY);
+    ctx.moveTo(padL, midY); ctx.lineTo(padL + plotW, midY);
     ctx.stroke();
 
-    // Set envelope band
-    ctx.fillStyle = 'rgba(60, 140, 255, 0.13)';
+    // Set envelope of the primary — the bigger bumps
+    ctx.fillStyle = 'rgba(60, 140, 255, 0.10)';
     ctx.beginPath();
     ctx.moveTo(sx(0), sy(envU[0]));
     for (let i = 1; i < N; i++) ctx.lineTo(sx(i), sy(envU[i]));
@@ -150,56 +164,49 @@ export function drawWaveTrain(
     ctx.closePath();
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(60, 140, 255, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 0; i < N; i++) {
-        const X = sx(i), Y = sy(envU[i]);
-        i === 0 ? ctx.moveTo(X, Y) : ctx.lineTo(X, Y);
-    }
-    ctx.stroke();
-
-    // Surface profile, coloured by slope: green where the face runs downhill in
-    // your direction of travel (free speed), red where you are climbing.
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    for (let i = 1; i < N; i++) {
-        const dyds = (surf[i] - surf[i - 1]) / (total / (N - 1));
-        // Travelling toward +s; a negative gradient ahead means downhill.
-        const t = Math.max(-1, Math.min(1, -dyds * 12));
-        ctx.strokeStyle = t > 0.15 ? GREEN : t < -0.15 ? 'rgba(239,83,80,0.75)' : DIM;
+    // Secondary swell, drawn plainly behind
+    if (secIdx >= 0) {
+        ctx.strokeStyle = 'rgba(167,139,250,0.7)';
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.moveTo(sx(i - 1), sy(surf[i - 1]));
-        ctx.lineTo(sx(i), sy(surf[i]));
+        for (let i = 0; i < N; i++) {
+            const X = sx(i), Y = sy(sec[i]);
+            i === 0 ? ctx.moveTo(X, Y) : ctx.lineTo(X, Y);
+        }
         ctx.stroke();
     }
 
-    // Rider marker
-    const riderI = (opts.behind / total) * (N - 1);
+    // Primary swell, coloured by slope: green where the face runs downhill
+    // along the swell, which is the side that drives you.
+    ctx.lineWidth = 2.4;
+    ctx.lineJoin = 'round';
+    for (let i = 1; i < N; i++) {
+        const dyds = (prim[i] - prim[i - 1]) / (total / (N - 1));
+        const t = Math.max(-1, Math.min(1, -dyds * 12));
+        ctx.strokeStyle = t > 0.15 ? GREEN : t < -0.15 ? 'rgba(239,83,80,0.8)' : DIM;
+        ctx.beginPath();
+        ctx.moveTo(sx(i - 1), sy(prim[i - 1]));
+        ctx.lineTo(sx(i), sy(prim[i]));
+        ctx.stroke();
+    }
+
+    // Rider
+    const riderI = Math.round((opts.behind / total) * (N - 1));
     const rx = sx(riderI);
-    const ry = sy(surf[Math.round(riderI)] + rider.rideHeight);
-
+    const ry = sy(prim[riderI] + sec[riderI] + rider.rideHeight);
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.setLineDash([2, 3]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(rx, padT);
-    ctx.lineTo(rx, padT + plotH);
-    ctx.stroke();
+    ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(rx, padT); ctx.lineTo(rx, padT + plotH); ctx.stroke();
     ctx.setLineDash([]);
-
     ctx.fillStyle = rider.onFoil ? '#fff' : RED;
-    ctx.beginPath();
-    ctx.arc(rx, ry, 3.2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(rx, ry, 3.4, 0, Math.PI * 2); ctx.fill();
 
-    // Crest travel direction. Crests move through the set faster than the set
-    // itself, so this arrow always runs forward along the swell.
     label(ctx, 'WAVE TRAIN', padL, 11, DIM);
-    label(ctx, 'crests →', padL + plotW, 11, 'rgba(60,140,255,0.65)', 'right');
+    label(ctx, 'primary', padL + plotW - 46, 11, 'rgba(74,222,128,0.8)', 'right', 8);
+    if (secIdx >= 0) label(ctx, 'secondary', padL + plotW, 11, 'rgba(167,139,250,0.85)', 'right', 8);
     label(ctx, `${opts.behind | 0}m`, padL, h - 4, FAINT);
-    label(ctx, 'you', rx, h - 4, DIM, 'center');
-    label(ctx, `+${opts.ahead | 0}m`, padL + plotW, h - 4, FAINT, 'right');
+    label(ctx, 'you \u2192 swell travel', rx, h - 4, DIM, 'center', 8);
+    label(ctx, `click to zoom`, padL + plotW, h - 4, FAINT, 'right', 8);
 }
 
 // --- SET POSITION -----------------------------------------------------------
@@ -219,53 +226,60 @@ export function drawSetMeter(
     panel(ctx, w, h);
     const a = analyseSwell(field, swellIndex, rider.x, rider.z, time);
 
-    const padL = 8, padR = 8;
-    const barW = w - padL - padR;
+    const padL = 8;
+    const barW = w - padL * 2;
 
-    // Set strength bar
-    label(ctx, 'IN THE SET', padL, 12, DIM);
-    const setY = 20;
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.beginPath(); ctx.roundRect(padL, setY, barW, 6, 3); ctx.fill();
+    // POWER — how hard the wave is driving you right now. This is the thing to
+    // keep in the green: it is the wave doing the work rather than your legs.
+    label(ctx, 'POWER', padL, 12, DIM);
 
-    const strength = Math.max(0, Math.min(1, a.setStrength));
-    ctx.fillStyle = strength > 0.66 ? GREEN : strength > 0.33 ? AMBER : DIM;
-    ctx.beginPath();
-    ctx.roundRect(padL, setY, Math.max(2, barW * strength), 6, 3);
-    ctx.fill();
+    // Normalised against roughly the drag a rider carries at speed, so green
+    // means genuinely gaining and red means paying to climb.
+    const REF = 90;
+    const norm = Math.max(-1, Math.min(1, rider.waveThrust / REF));
+    const barY = 19, barH = 9;
 
-    label(
-        ctx,
-        strength > 0.66 ? 'peak of set' : strength > 0.33 ? 'building' : 'between sets',
-        padL + barW, 12, strength > 0.66 ? GREEN : DIM, 'right'
-    );
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.beginPath(); ctx.roundRect(padL, barY, barW, barH, 4); ctx.fill();
 
-    // Position on the wave: a small circle diagram. Crest at top, trough at
-    // bottom, front face on the right (the side you want to be on).
-    const cy = h - 30;
-    const cx = w / 2;
-    const R = 20;
+    // zone shading: left half braking, right half driving
+    const mid = padL + barW * 0.5;
+    ctx.fillStyle = 'rgba(239,83,80,0.16)';
+    ctx.beginPath(); ctx.roundRect(padL, barY, barW * 0.5, barH, [4, 0, 0, 4]); ctx.fill();
+    ctx.fillStyle = 'rgba(74,222,128,0.16)';
+    ctx.beginPath(); ctx.roundRect(mid, barY, barW * 0.5, barH, [0, 4, 4, 0]); ctx.fill();
 
-    ctx.strokeStyle = FAINT;
+    const col = norm > 0.28 ? GREEN : norm > 0.02 ? AMBER : RED;
+    const px = mid + norm * (barW * 0.5);
+    ctx.fillStyle = col;
+    if (norm >= 0) {
+        ctx.beginPath(); ctx.roundRect(mid, barY, Math.max(2, px - mid), barH, 3); ctx.fill();
+    } else {
+        ctx.beginPath(); ctx.roundRect(px, barY, Math.max(2, mid - px), barH, 3); ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
     ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(mid, barY - 2); ctx.lineTo(mid, barY + barH + 2); ctx.stroke();
+
+    const word = norm > 0.28 ? 'DRIVING' : norm > 0.02 ? 'holding' : 'CLIMBING';
+    label(ctx, word, padL + barW, 12, col, 'right');
+    label(ctx, `${rider.waveThrust.toFixed(0)} N`, padL, barY + barH + 11, DIM, 'left', 8);
+
+    // Where you sit on the wave, kept because it explains the power reading
+    const cy = h - 26;
+    const cx = w / 2;
+    const R = 17;
+    ctx.strokeStyle = FAINT; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
-
-    // Highlight the front face arc (phase 0..pi -> downhill side)
-    ctx.strokeStyle = 'rgba(74,222,128,0.5)';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(74,222,128,0.5)'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(cx, cy, R, -Math.PI / 2, Math.PI / 2); ctx.stroke();
-
-    // Marker. phase 0 = crest (top), +pi/2 = front face (right), pi = trough.
     const ang = -Math.PI / 2 + a.phase;
-    const mx = cx + Math.cos(ang) * R;
-    const my = cy + Math.sin(ang) * R;
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, Math.PI * 2); ctx.fill();
-
-    label(ctx, 'crest', cx, cy - R - 5, FAINT, 'center', 8);
-    label(ctx, 'trough', cx, cy + R + 11, FAINT, 'center', 8);
-    label(ctx, 'face', cx + R + 4, cy + 3, 'rgba(74,222,128,0.7)', 'left', 8);
-    label(ctx, 'back', cx - R - 4, cy + 3, FAINT, 'right', 8);
+    ctx.beginPath(); ctx.arc(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R, 3.2, 0, Math.PI * 2); ctx.fill();
+    label(ctx, 'crest', cx, cy - R - 4, FAINT, 'center', 7);
+    label(ctx, 'trough', cx, cy + R + 9, FAINT, 'center', 7);
+    label(ctx, 'face', cx + R + 3, cy + 3, 'rgba(74,222,128,0.7)', 'left', 7);
+    label(ctx, 'back', cx - R - 3, cy + 3, FAINT, 'right', 7);
 }
 
 // --- SWELL RADAR ------------------------------------------------------------
