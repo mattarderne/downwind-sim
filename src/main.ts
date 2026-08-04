@@ -1785,6 +1785,10 @@ function updateRaceHUD() {
 // --- GUI ---
 const gui = new GUI();
 gui.close();
+// The lil-gui panel is legacy: everything meaningful in it now lives in
+// Settings. Hidden by default, exposed behind an Advanced toggle, and intended
+// to be removed once nothing depends on it.
+gui.domElement.style.display = 'none';
 gui.add(PARAMS, 'selectedFoil', Object.keys(FOIL_PRESETS)).name('Foil').onChange((v: string) => {
     activeFoil = { ...FOIL_PRESETS[v] };
 });
@@ -3011,6 +3015,11 @@ function setInstrumentsVisible(v: boolean) {
 }
 instToggleEl.addEventListener('change', () => setInstrumentsVisible(instToggleEl.checked));
 
+const advancedToggleEl = document.querySelector('#advanced-toggle') as HTMLInputElement;
+advancedToggleEl.addEventListener('change', () => {
+    gui.domElement.style.display = advancedToggleEl.checked ? '' : 'none';
+});
+
 // Click the wave train to cycle how far it looks up and down the track.
 (document.querySelector('#inst-wavetrain') as HTMLCanvasElement)
     .addEventListener('click', () => {
@@ -3560,8 +3569,14 @@ function updatePhysics(dt: number, time: number) {
     if (foilState.rideHeight <= 0.001) {
         // Board has hit the water.
         crashFoil(foilState.speed < stallSpeedFor(foil, riderMass) * 0.9 ? 'stall' : 'touchdown');
-    } else if (wingDepth < 0.04 && foilState.vy - foilState.orbitalW > 0.2) {
-        // Wing has come out of the water while still climbing — a breach.
+    } else if (wingDepth < 0.065 && foilState.vy - foilState.orbitalW > 0.15) {
+        // Wing has broken the surface while still climbing — a breach.
+        //
+        // The threshold sits just inside where ventilation collapses lift, so a
+        // committed climb can punch through. Held any lower, the wing simply
+        // ran out of lift at ~0.75 m of an 0.8 m mast and settled back, which
+        // meant holding climb could never breach and only a pump ever did.
+        // Momentum is still required: drifting up will not do it.
         crashFoil('breach');
     }
 }
