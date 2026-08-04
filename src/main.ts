@@ -2067,10 +2067,13 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         blurb: 'One swell, matched to your speed — point downwind and go',
         foil: 'Beginner 1600',      // cruises ~13.5 kt
         swells: [
-            // c/V ~ 1.0 at the ~18.5 kt this tier actually rides at, so a
-            // straight line stays in sync with the swell and nothing is asked
-            // of the player but to stay on foil.
-            { enabled: true, height: 1.1, period: 6.2, direction: 0 },  // crests ~18.8 kt
+            // c/V ~ 0.89. Deliberately NOT 1.0: at parity the rider phase-locks
+            // on the back of the wave and never reaches a crest or a face, so
+            // there is no hill to ride and no stored height to spend. Measured,
+            // c/V 0.99 put the rider on the back 91% of the time and on the
+            // driving face 0%. At 0.89 they cycle crest-face-back and spend
+            // ~44% of the run on the face, while a straight line still works.
+            { enabled: true, height: 1.1, period: 5.4, direction: 0 },
             { enabled: false, height: 0.8, period: 11.0, direction: 25 },
             { enabled: false, height: 0.4, period: 3.0, direction: 6 },
         ],
@@ -2087,11 +2090,10 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         swells: [
             // c/V ~ 0.9: angling by ~25 deg noticeably helps, but straight is
             // still survivable.
-            // Period follows riding speed, and riding speed moved when the
-            // adverse-thrust penalty was halved — less braking on the back of a
-            // wave means a faster rider, which lowers c/V and demands a bigger
-            // sync angle. Re-set so c/V lands near 0.93 again.
-            { enabled: true, height: 1.8, period: 6.4, direction: 0 },  // crests ~19.4 kt
+            // c/V ~ 0.78, so the rider steadily overtakes the swell: over the
+            // crest, down the face, up the back, repeat. ~49% of the run is
+            // spent on the driving face, and a straight line still survives.
+            { enabled: true, height: 1.8, period: 5.4, direction: 0 },
             { enabled: false, height: 1.0, period: 11.0, direction: 25 },
             // Chop is the most destabilising part of any sea: short wavelength
             // means high curvature, so the wingtips are thrown about faster than
@@ -2116,12 +2118,13 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         // The same water is gentle on a big wing and technical on a fast one.
         foil: 'Race 700',           // cruises ~19.5 kt
         swells: [
-            // c/V ~ 0.85: the swell is slower than you, so holding a bump
-            // requires angling ~32 deg. Riding straight means climbing the
-            // back of every wave.
-            { enabled: true, height: 2.1, period: 5.8, direction: 0 },
+            // c/V ~ 0.8. Same reasoning as the other tiers — parity phase-locks
+            // you on the back of the wave with no hill to ride — but with a
+            // race foil, a crossing swell and chop on top, so holding position
+            // on the face is genuinely demanding.
+            { enabled: true, height: 2.1, period: 5.4, direction: 0 },
             { enabled: true, height: 1.0, period: 12.0, direction: 30 },
-            { enabled: true, height: 0.6, period: 3.8, direction: 6 },
+            { enabled: true, height: 0.45, period: 4.0, direction: 6 },
         ],
         pumpCost: 20,
         energyRegen: 5,
