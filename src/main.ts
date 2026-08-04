@@ -2036,6 +2036,10 @@ interface Difficulty {
     energyRegen: number;
     /** Angle-of-attack authority; less means a calmer, less twitchy board. */
     alphaRangeDeg: number;
+    /** Bump readability mode index — how much help reading the water. */
+    vizMode: number;
+    /** Whether the trim and height card is available. */
+    showTrim: boolean;
 }
 
 const DIFFICULTIES: Record<string, Difficulty> = {
@@ -2054,6 +2058,8 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         pumpCost: 12,
         energyRegen: 14,
         alphaRangeDeg: 6.5,
+        vizMode: 10,   // every cue at once
+        showTrim: true,
     },
     Medium: {
         name: 'Medium',
@@ -2069,6 +2075,8 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         pumpCost: 16,
         energyRegen: 8,
         alphaRangeDeg: 8.0,
+        vizMode: 5,    // contours only
+        showTrim: true,
     },
     Hard: {
         name: 'Hard',
@@ -2090,6 +2098,8 @@ const DIFFICULTIES: Record<string, Difficulty> = {
         pumpCost: 20,
         energyRegen: 5,
         alphaRangeDeg: 9.0,
+        vizMode: 3,    // slope shading only
+        showTrim: false,  // read the water, not the gauge
     },
 };
 
@@ -2108,6 +2118,8 @@ function applyDifficulty(key: string) {
     PUMP_COST = d.pumpCost;
     ENERGY_REGEN = d.energyRegen;
     ALPHA_RANGE = d.alphaRangeDeg * Math.PI / 180;
+    setViz(d.vizMode);
+    setTrimVisible(d.showTrim);
     rebuildWaveField();
     renderSwellPanel();
     renderRigPanel();
@@ -2125,7 +2137,25 @@ function markCustom() {
 
 const diffRowEl = document.querySelector('#difficulty-row') as HTMLElement;
 const diffBlurbEl = document.querySelector('#difficulty-blurb') as HTMLElement;
-const statusChipEl = document.querySelector('#status-chip') as HTMLElement;
+const chipEl = document.querySelector('#difficulty-chip') as HTMLButtonElement;
+
+const TIER_ORDER = ['Easy', 'Medium', 'Hard'];
+
+/** Clicking the chip steps Easy -> Medium -> Hard -> Easy. */
+function cycleDifficulty() {
+    const i = TIER_ORDER.indexOf(currentDifficulty);
+    applyDifficulty(TIER_ORDER[(i + 1) % TIER_ORDER.length]);
+}
+chipEl.addEventListener('click', cycleDifficulty);
+
+let trimVisible = true;
+function setTrimVisible(v: boolean) {
+    trimVisible = v;
+    // Looked up lazily: difficulty is applied during module init, before the
+    // instrument element bindings further down have been evaluated.
+    const el = document.querySelector('#trim-dock');
+    el?.classList.toggle('instruments--hidden', !v);
+}
 
 function renderDifficulty() {
     diffRowEl.querySelectorAll<HTMLButtonElement>('button').forEach(b => {
@@ -2135,10 +2165,12 @@ function renderDifficulty() {
     diffBlurbEl.textContent = d ? d.blurb : 'Custom conditions';
     // Always-visible chip, so it is never a mystery what you are riding
     const active = SWELLS.filter(s => s.enabled).length;
-    statusChipEl.innerHTML =
+    const next = TIER_ORDER[(TIER_ORDER.indexOf(currentDifficulty) + 1) % TIER_ORDER.length];
+    chipEl.innerHTML =
         `<span class="chip-diff">${currentDifficulty}</span>` +
         `<span class="chip-foil">${activeFoil.name}</span>` +
-        `<span class="chip-sea">${active} swell${active === 1 ? '' : 's'}</span>`;
+        `<span class="chip-hint">${active} swell${active === 1 ? '' : 's'} · ` +
+        `${TIER_ORDER.includes(currentDifficulty) ? 'click for ' + next : 'custom'}</span>`;
 }
 
 function buildDifficulty() {
@@ -2159,7 +2191,7 @@ function buildDifficulty() {
 const swellPanelEl = document.querySelector('#swell-panel') as HTMLElement;
 const swellRowsEl = document.querySelector('#swell-rows') as HTMLElement;
 const swellSummaryEl = document.querySelector('#swell-summary') as HTMLElement;
-const swellBtnEl = document.querySelector('#swell-btn') as HTMLButtonElement;
+const settingsBtnEl = document.querySelector('#settings-toggle') as HTMLButtonElement;
 
 function applySwellSize(i: number, size: SwellPreset) {
     swellSize[i] = size;
@@ -2334,6 +2366,9 @@ function buildRigPanel() {
 function renderRigPanel() {
     const f = activeFoil;
     const stall = stallSpeedFor(f, riderMass);
+    // Keep the dropdown in step with the foil, which difficulty also sets.
+    const sel = rigRowsEl.querySelector('[data-role="foil"]') as HTMLSelectElement | null;
+    if (sel) sel.value = activeFoil.name;
     rigRowsEl.querySelector('[data-role="foilmeta"]')!.textContent =
         `${(f.wingArea * 10000).toFixed(0)} cm² · AR ${f.aspectRatio.toFixed(1)} · ` +
         `span ${(f.wingSpan * 100).toFixed(0)} cm · min fly ${(stall * 1.944).toFixed(1)} kt`;
@@ -2349,13 +2384,12 @@ function renderRigPanel() {
 
 buildRigPanel();
 buildDifficulty();
-applyDifficulty('Medium');
 
 function setSwellPanelOpen(open: boolean) {
     swellPanelEl.classList.toggle('swell-panel--hidden', !open);
 }
 
-swellBtnEl.addEventListener('click', () =>
+settingsBtnEl.addEventListener('click', () =>
     setSwellPanelOpen(swellPanelEl.classList.contains('swell-panel--hidden'))
 );
 document.querySelector('#swell-close')!.addEventListener('click', () => setSwellPanelOpen(false));
@@ -2966,16 +3000,16 @@ const instTrimCtx = setupInstCanvas('#inst-trim', INST_TRIM.w, INST_TRIM.h);
 
 const instrumentsEl = document.querySelector('#instruments') as HTMLElement;
 const trimDockEl = document.querySelector('#trim-dock') as HTMLElement;
-const instToggleEl = document.querySelector('#inst-toggle') as HTMLButtonElement;
+const instToggleEl = document.querySelector('#inst-toggle') as HTMLInputElement;
 
 let instrumentsVisible = true;
 function setInstrumentsVisible(v: boolean) {
     instrumentsVisible = v;
     instrumentsEl.classList.toggle('instruments--hidden', !v);
-    trimDockEl.classList.toggle('instruments--hidden', !v);
-    instToggleEl.style.opacity = v ? '1' : '0.5';
+    trimDockEl.classList.toggle('instruments--hidden', !(v && trimVisible));
+    instToggleEl.checked = v;
 }
-instToggleEl.addEventListener('click', () => setInstrumentsVisible(!instrumentsVisible));
+instToggleEl.addEventListener('change', () => setInstrumentsVisible(instToggleEl.checked));
 
 // Click the wave train to cycle how far it looks up and down the track.
 (document.querySelector('#inst-wavetrain') as HTMLCanvasElement)
@@ -3210,6 +3244,9 @@ window.addEventListener('keydown', (e) => {
             break;
         case 'KeyS':
             setSwellPanelOpen(swellPanelEl.classList.contains('swell-panel--hidden'));
+            break;
+        case 'KeyD':
+            cycleDifficulty();
             break;
         case 'KeyC':
             useChaseCamera = !useChaseCamera;
@@ -3840,6 +3877,11 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// Everything the difficulty touches — instruments, readability modes, the trim
+// dock — is declared above this point, so the starting tier is applied here
+// rather than mid-module.
+applyDifficulty('Medium');
 
 // Start loop
 animate();

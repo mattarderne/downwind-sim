@@ -110,28 +110,22 @@
         <canvas id="inst-set"></canvas>
         <canvas id="inst-radar"></canvas>
       </div>
-      <!-- Bump readability experiments -->
-      <div id="viz-wrap">
-        <div id="viz-title">BUMP READABILITY</div>
-        <div id="viz-bar"></div>
-        <div id="viz-note"></div>
-      </div>
     </div>
-    <button id="inst-toggle" title="Toggle instruments (I)">◧ INSTRUMENTS</button>
 
     <!-- Trim + height, parked beside the rider so it stays in view while riding -->
     <div id="trim-dock">
       <canvas id="inst-trim"></canvas>
     </div>
 
-    <!-- Always-visible summary of what you are riding -->
-    <div id="status-chip"></div>
+    <!-- Primary controls, top right -->
+    <div id="hud-top-right">
+      <button id="difficulty-chip" title="Click to cycle difficulty (D)"></button>
+      <button id="settings-toggle" title="Settings (S)">⚙ SETTINGS</button>
+    </div>
 
-    <!-- Sea state config -->
-    <button id="swell-btn" title="Sea state (S)">≋ SWELL</button>
     <div id="swell-panel" class="swell-panel--hidden">
       <div class="swell-panel-head">
-        <span>SEA STATE</span>
+        <span>SETTINGS</span>
         <button id="swell-close" aria-label="Close">✕</button>
       </div>
       <div class="swell-subhead" style="margin-top:0;padding-top:0;border-top:none">DIFFICULTY</div>
@@ -141,6 +135,12 @@
       <div id="swell-rows"></div>
       <div class="swell-subhead">RIG &amp; WIND</div>
       <div id="rig-rows"></div>
+      <div class="swell-subhead">BUMP READABILITY</div>
+      <div id="viz-bar"></div>
+      <div id="viz-note"></div>
+      <div class="swell-subhead">DISPLAY</div>
+      <label class="swell-toggle"><input type="checkbox" id="inst-toggle" checked>
+        <span>Instrument panels</span></label>
       <div class="swell-panel-foot">
         <span id="swell-summary"></span>
         <button id="swell-reset">Reset</button>
