@@ -254,3 +254,31 @@ Physics first and testable is the main lesson from v1. Most of the time went on
 bugs the renderer hid — a fixed mast drag area, a turn that deleted momentum, a
 control mapping that disagreed with its own gauge. All of them would have been
 caught by a test in the first hour.
+
+
+---
+
+## 11. Fudges in v1 that v2 must not inherit
+
+Two places where v1 trades physics for feel. Both are marked in the source.
+
+**Asymmetric wave drive (`WAVE_ENERGY_MULT = 1.7`).** The thrust term is derived
+— lift tilting forward in rising water — and honest at 1.0. v1 scales only the
+accelerating side, leaving the braking side halved, so energy is not conserved
+across a wave cycle. It exists because the true accelerations, while real, are
+too gentle to perceive through a screen.
+
+*The v2 answer is presentation, not force.* Clear water, a visibly high mast,
+camera and spray that scale with speed. If acceleration can be seen it does not
+need inflating. Build the renderer first, then check whether 1.0 still feels
+dead.
+
+**Halved adverse thrust.** Climbing the back of a bump cost about 7 kt at full
+strength, which stopped a run dead. Halving it is a blunt fix for what is really
+a positioning problem — the rider should rarely be pinned on the back at all if
+c/V is set correctly.
+
+**Also worth carrying forward:** tuning changes couple. Halving the adverse
+penalty made riders 1 kt faster, which lowered c/V and broke the sync angle the
+whole tier was built around. Any force change needs the tier table re-derived,
+not just re-tested.

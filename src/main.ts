@@ -156,10 +156,27 @@ const ROLL_SPRING = 6.0;
 const ROLL_DAMPING = 3.0;
 // Wave-induced roll strength — higher = more wobble from uneven wave surface across the wing
 const WAVE_TORQUE_GAIN = 2.0;
-// Drive multiplier on the accelerating side of a wave. The underlying term is
-// physically derived, so 1.0 is the honest value; above that is a deliberate
-// game-feel choice, trading strict accuracy for a bump you can feel drop away
-// beneath you. The original game effectively ran about 2.5.
+// ============================================================================
+// NOT PHYSICS — GAME FEEL FUDGE. Do not carry this into v2.
+// ============================================================================
+// The wave thrust term itself is derived: lift tilts forward in rising water,
+// which is genuinely how a foil extracts energy from a swell. At 1.0 the model
+// is honest and energy-conserving.
+//
+// This multiplier scales only the ACCELERATING side of that term, leaving the
+// braking side halved. It exists because the honest value, while correct, does
+// not read as a bump dropping away beneath you — the accelerations are real but
+// too gentle to feel through a screen. 1.7 roughly doubles the speed swing per
+// wave (about 11 kt peak to trough on Medium) without slowing the average.
+//
+// The asymmetry is the dishonest part: a real wave that pushes you that hard
+// down the face would brake you just as hard up the back. Energy is not
+// conserved across a wave cycle here.
+//
+// For v2, the intended fix is to stop compensating in the force term and give
+// the rider the information instead: clearer water, a visible mast, camera and
+// spray cues that scale with speed. If the acceleration can be SEEN, it does
+// not need to be inflated. See SPEC-v2.md.
 let WAVE_ENERGY_MULT = 1.7;
 // Sideways slip decay rate — higher = tighter tracking along heading, less drift in turns
 const LATERAL_RESISTANCE = 1.0;
@@ -1554,7 +1571,8 @@ function updateHUD() {
     hudHeightFill.style.width = `${heightPct}%`;
     hudHeightFill.style.background = heightPct < 20 ? '#ef5350' : '#4fc3f7';
 
-    skipFlashEl.style.opacity = foilState.skipFlashTimer > 0 ? '1' : '0';
+    skipFlashEl.style.opacity =
+        (foilState.skipFlashTimer > 0 && gameState === 'riding') ? '1' : '0';
 
     hudEnergy.textContent = `Energy: ${Math.round(foilState.energy)}`;
     hudEnergyFill.style.width = `${foilState.energy}%`;
@@ -3646,6 +3664,7 @@ function updatePhysics(dt: number, time: number) {
 }
 
 function crashFoil(reason: 'breach' | 'touchdown' | 'stall') {
+    foilState.skipFlashTimer = 0;   // a crash is not a save; clear the flash
     foilState.rideHeight = 0;
     foilState.vy = 0;
     foilState.onFoil = false;

@@ -145,9 +145,14 @@ export function drawWaveTrain(
         if (a > maxAbs) maxAbs = a;
     }
 
-    const yScale = (plotH / 2) / (maxAbs * 1.12);
+    // Vertical exaggeration. Ocean swell is very flat in profile — a 2 m face
+    // on a 56 m wavelength is a 3% grade — so drawn true to scale the set
+    // structure is invisible. Stretched and clipped to the panel instead.
+    const VERT_GAIN = 1.7;
+    const yScale = ((plotH / 2) / (maxAbs * 1.12)) * VERT_GAIN;
     const sx = (i: number) => padL + (i / (N - 1)) * plotW;
-    const sy = (v: number) => midY - v * yScale;
+    const sy = (v: number) =>
+        Math.max(padT - 2, Math.min(padT + plotH + 2, midY - v * yScale));
 
     ctx.strokeStyle = FAINT;
     ctx.lineWidth = 1;
@@ -206,7 +211,7 @@ export function drawWaveTrain(
     if (secIdx >= 0) label(ctx, 'secondary', padL + plotW, 11, 'rgba(167,139,250,0.85)', 'right', 8);
     label(ctx, `${opts.behind | 0}m`, padL, h - 4, FAINT);
     label(ctx, 'you \u2192 swell travel', rx, h - 4, DIM, 'center', 8);
-    label(ctx, `click to zoom`, padL + plotW, h - 4, FAINT, 'right', 8);
+    label(ctx, `click to zoom \u00d7${VERT_GAIN}v`, padL + plotW, h - 4, FAINT, 'right', 8);
 }
 
 // --- SET POSITION -----------------------------------------------------------
@@ -226,60 +231,53 @@ export function drawSetMeter(
     panel(ctx, w, h);
     const a = analyseSwell(field, swellIndex, rider.x, rider.z, time);
 
-    const padL = 8;
-    const barW = w - padL * 2;
+    label(ctx, 'ON THE WAVE', 8, 12, DIM);
 
-    // POWER — how hard the wave is driving you right now. This is the thing to
-    // keep in the green: it is the wave doing the work rather than your legs.
-    label(ctx, 'POWER', padL, 12, DIM);
-
-    // Normalised against roughly the drag a rider carries at speed, so green
-    // means genuinely gaining and red means paying to climb.
-    const REF = 90;
-    const norm = Math.max(-1, Math.min(1, rider.waveThrust / REF));
-    const barY = 19, barH = 9;
-
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    ctx.beginPath(); ctx.roundRect(padL, barY, barW, barH, 4); ctx.fill();
-
-    // zone shading: left half braking, right half driving
-    const mid = padL + barW * 0.5;
-    ctx.fillStyle = 'rgba(239,83,80,0.16)';
-    ctx.beginPath(); ctx.roundRect(padL, barY, barW * 0.5, barH, [4, 0, 0, 4]); ctx.fill();
-    ctx.fillStyle = 'rgba(74,222,128,0.16)';
-    ctx.beginPath(); ctx.roundRect(mid, barY, barW * 0.5, barH, [0, 4, 4, 0]); ctx.fill();
-
-    const col = norm > 0.28 ? GREEN : norm > 0.02 ? AMBER : RED;
-    const px = mid + norm * (barW * 0.5);
-    ctx.fillStyle = col;
-    if (norm >= 0) {
-        ctx.beginPath(); ctx.roundRect(mid, barY, Math.max(2, px - mid), barH, 3); ctx.fill();
-    } else {
-        ctx.beginPath(); ctx.roundRect(px, barY, Math.max(2, mid - px), barH, 3); ctx.fill();
-    }
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(mid, barY - 2); ctx.lineTo(mid, barY + barH + 2); ctx.stroke();
-
-    const word = norm > 0.28 ? 'DRIVING' : norm > 0.02 ? 'holding' : 'CLIMBING';
-    label(ctx, word, padL + barW, 12, col, 'right');
-    label(ctx, `${rider.waveThrust.toFixed(0)} N`, padL, barY + barH + 11, DIM, 'left', 8);
-
-    // Where you sit on the wave, kept because it explains the power reading
-    const cy = h - 26;
+    // The ring IS the gauge. Colour runs green at the crest through to orange in
+    // the trough, because the top of a wave carries the potential — height to
+    // spend and a face to drop into — while the bottom has neither. Where the
+    // marker sits on that gradient is the whole reading; a separate power bar
+    // said the same thing worse.
     const cx = w / 2;
-    const R = 17;
-    ctx.strokeStyle = FAINT; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = 'rgba(74,222,128,0.5)'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(cx, cy, R, -Math.PI / 2, Math.PI / 2); ctx.stroke();
+    const cy = h / 2 + 8;
+    const R = Math.min(w, h) / 2 - 20;
+
+    const SEG = 48;
+    ctx.lineWidth = 6;
+    for (let i = 0; i < SEG; i++) {
+        // phase across the ring: 0 at top (crest), pi at bottom (trough)
+        const p0 = (i / SEG) * Math.PI * 2 - Math.PI;
+        const p1 = ((i + 1) / SEG) * Math.PI * 2 - Math.PI;
+        const height = Math.cos((p0 + p1) / 2);        // +1 crest, -1 trough
+        const t = (height + 1) / 2;                     // 0 trough .. 1 crest
+        const r = Math.round(250 - 180 * t);
+        const g = Math.round(150 + 72 * t);
+        const b = Math.round(60 + 68 * t);
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.85)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, -Math.PI / 2 + p0, -Math.PI / 2 + p1);
+        ctx.stroke();
+    }
+
+    // Rider marker
     const ang = -Math.PI / 2 + a.phase;
+    const mx = cx + Math.cos(ang) * R;
+    const my = cy + Math.sin(ang) * R;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath(); ctx.arc(mx, my, 6.5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R, 3.2, 0, Math.PI * 2); ctx.fill();
-    label(ctx, 'crest', cx, cy - R - 4, FAINT, 'center', 7);
-    label(ctx, 'trough', cx, cy + R + 9, FAINT, 'center', 7);
-    label(ctx, 'face', cx + R + 3, cy + 3, 'rgba(74,222,128,0.7)', 'left', 7);
-    label(ctx, 'back', cx - R - 3, cy + 3, FAINT, 'right', 7);
+    ctx.beginPath(); ctx.arc(mx, my, 4.2, 0, Math.PI * 2); ctx.fill();
+
+    label(ctx, 'CREST', cx, cy - R - 6, 'rgba(74,222,128,0.85)', 'center', 8);
+    label(ctx, 'TROUGH', cx, cy + R + 12, 'rgba(250,150,60,0.85)', 'center', 8);
+    label(ctx, 'face', cx + R + 5, cy + 3, DIM, 'left', 7);
+    label(ctx, 'back', cx - R - 5, cy + 3, DIM, 'right', 7);
+
+    // How strong this set is, which is the other half of "is it worth being here"
+    const strength = Math.max(0, Math.min(1, a.setStrength));
+    label(ctx,
+        strength > 0.66 ? 'peak of set' : strength > 0.33 ? 'building' : 'between sets',
+        w - 8, 12, strength > 0.66 ? GREEN : strength > 0.33 ? AMBER : DIM, 'right', 8);
 }
 
 // --- SWELL RADAR ------------------------------------------------------------
